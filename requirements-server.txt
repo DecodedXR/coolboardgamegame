@@ -1,0 +1,4 @@
+# Server-only deps for headless cloud deploy (Render). The server imports ONLY
+# websockets (+ stdlib + pure project modules) — no pygame. Pinned for
+# reproducible builds; floor is 14 (process_request(connection, request) API).
+websockets==16.0
