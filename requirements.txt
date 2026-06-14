@@ -1,0 +1,6 @@
+# pygame-ce (community edition) is a drop-in for pygame and ships wheels for
+# newer Python versions (incl. 3.14) sooner. It imports as `pygame`.
+pygame-ce>=2.5
+websockets>=12.0
+pytest>=8.0
+pytest-asyncio>=0.23
