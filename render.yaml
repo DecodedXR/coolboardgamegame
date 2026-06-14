@@ -1,0 +1,18 @@
+# Render deploy descriptor (Milestone 3 — cloud deployment).
+#
+# One free-tier web service running the headless websockets server. Render
+# injects $PORT and the app binds 0.0.0.0:$PORT (see config.py) — the identical
+# `python -m server` command runs here and on LAN. TLS is terminated at Render's
+# proxy; the app keeps speaking plain ws on $PORT.
+services:
+  - type: web
+    name: coolboardgamegame
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-server.txt
+    startCommand: python -m server
+    healthCheckPath: /healthz          # served by the process_request hook (server/__main__.py)
+    autoDeploy: true                   # deploy on every push to main
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.1                  # pin; bump patch as needed
