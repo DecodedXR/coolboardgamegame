@@ -9,11 +9,14 @@ in milliseconds. This is the "headless pytest" from the plan's verification step
 from __future__ import annotations
 
 import asyncio
+import http.client
 from typing import Any, Optional
 
 import pytest
+import websockets
 
 import server.connection as connection
+from server.__main__ import health_check
 from server.connection import GameServer
 from shared import protocol
 
@@ -233,6 +236,44 @@ async def test_host_disconnect_promotes_next(monkeypatch):
 
     await b.drop()
     await tb
+
+
+# --- Health endpoint (M3 W2) ----------------------------------------------
+# The only test that opens a real socket: it stands up an actual websockets
+# server with the production process_request hook so both branches — plain HTTP
+# probe vs. WebSocket upgrade on the same path "/" — are verified end to end.
+
+
+def _http_get(port: int, path: str) -> tuple[int, str]:
+    conn = http.client.HTTPConnection("localhost", port, timeout=2)
+    try:
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        return resp.status, resp.read().decode()
+    finally:
+        conn.close()
+
+
+async def test_health_check_responds_and_still_upgrades():
+    async def handler(ws):  # echoes, just to prove the upgrade succeeded
+        async for msg in ws:
+            await ws.send(msg)
+
+    async with websockets.serve(
+        handler, "localhost", 0, process_request=health_check
+    ) as server:
+        port = server.sockets[0].getsockname()[1]
+
+        # Plain HTTP probes (health checker / browser) get 200, not 426.
+        for path in ("/healthz", "/"):
+            status, body = await asyncio.to_thread(_http_get, port, path)
+            assert status == 200, f"{path} -> {status}"
+            assert "ok" in body
+
+        # A real WebSocket client still upgrades on "/" and round-trips.
+        async with websockets.connect(f"ws://localhost:{port}") as ws:
+            await ws.send("hi")
+            assert await ws.recv() == "hi"
 
 
 # --- Wrong Answers Only (in-game) -----------------------------------------
