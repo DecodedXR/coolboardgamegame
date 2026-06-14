@@ -23,3 +23,15 @@ ROOM_CODE_LENGTH = 4
 # How long a disconnected player's slot is held before being dropped, in seconds.
 # (Reconnection-by-token is a future milestone; the grace period is designed in now.)
 DISCONNECT_GRACE_SECONDS = 20.0
+
+# --- Wrong Answers Only (first minigame) ----------------------------------
+# Need at least two contestants so there's always someone else to vote for.
+WAO_MIN_CONTESTANTS = 2
+WAO_TOTAL_ROUNDS = 3
+WAO_MAX_ANSWER_LEN = 80
+WAO_POINTS_PER_VOTE = 100
+# Auto-host phase budgets, in seconds (ignored in human-host mode, which is
+# advanced manually by the host).
+WAO_ANSWER_SECONDS = 60.0
+WAO_VOTE_SECONDS = 30.0
+WAO_REVEAL_SECONDS = 12.0

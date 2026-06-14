@@ -66,6 +66,13 @@ class FakeConn:
     def types(self) -> list[str]:
         return [m["type"] for m in self.outbox]
 
+    def game(self) -> dict[str, Any]:
+        """Most recent per-player game snapshot this conn has seen."""
+        g = self.last(protocol.S_GAME_STATE)
+        if g is None:
+            raise AssertionError("no game snapshot received")
+        return g["game"]
+
 
 async def settle(rounds: int = 8) -> None:
     """Yield control so scheduled sends/broadcasts/tasks run to completion."""
@@ -188,9 +195,11 @@ async def test_start_game_reaches_everyone():
     server = GameServer()
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
+    c, tc = await open_conn(server)
     await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_HUMAN)
     code = a.last(protocol.S_ROOM_CREATED)["code"]
     await b.push(protocol.C_JOIN_ROOM, code=code, name="B")
+    await c.push(protocol.C_JOIN_ROOM, code=code, name="C")  # host + 2 contestants
 
     await a.push(protocol.C_START_GAME)  # A is the human host
 
@@ -198,8 +207,8 @@ async def test_start_game_reaches_everyone():
     assert protocol.S_GAME_STARTED in b.types()
     assert a.room()["in_game"] is True
 
-    await a.drop(); await b.drop()
-    await asyncio.gather(ta, tb)
+    await a.drop(); await b.drop(); await c.drop()
+    await asyncio.gather(ta, tb, tc)
 
 
 async def test_host_disconnect_promotes_next(monkeypatch):
@@ -224,3 +233,140 @@ async def test_host_disconnect_promotes_next(monkeypatch):
 
     await b.drop()
     await tb
+
+
+# --- Wrong Answers Only (in-game) -----------------------------------------
+
+
+async def _host_auto_room(server, conns, names):
+    """Create an auto room with the first conn and join the rest. Returns code."""
+    first, *rest = conns
+    await first.push(protocol.C_CREATE_ROOM, name=names[0], host_mode=protocol.HOST_AUTO)
+    code = first.last(protocol.S_ROOM_CREATED)["code"]
+    for conn, name in zip(rest, names[1:]):
+        await conn.push(protocol.C_JOIN_ROOM, code=code, name=name)
+    return code
+
+
+async def test_start_game_needs_two_contestants():
+    server = GameServer()
+    a, ta = await open_conn(server)
+    await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_AUTO)
+    await a.push(protocol.C_START_GAME)
+    assert a.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_ENOUGH_PLAYERS
+    assert protocol.S_GAME_STARTED not in a.types()
+    await a.drop(); await ta
+
+
+async def test_auto_game_full_flow(monkeypatch):
+    monkeypatch.setattr(connection, "WAO_TOTAL_ROUNDS", 1)
+    server = GameServer()
+    a, ta = await open_conn(server)
+    b, tb = await open_conn(server)
+    c, tc = await open_conn(server)
+    await _host_auto_room(server, [a, b, c], ["A", "B", "C"])
+
+    await a.push(protocol.C_START_GAME)
+    assert protocol.S_GAME_STARTED in a.types() and protocol.S_GAME_STARTED in c.types()
+    gs = a.game()
+    assert gs["phase"] == protocol.PHASE_PROMPT
+    assert gs["contestant_count"] == 3
+    assert gs["you_role"] == "contestant"
+
+    # Everyone answers -> auto-advances to the vote phase.
+    await a.push(protocol.C_SUBMIT_ANSWER, text="answer A")
+    await b.push(protocol.C_SUBMIT_ANSWER, text="answer B")
+    await c.push(protocol.C_SUBMIT_ANSWER, text="answer C")
+    assert a.game()["phase"] == protocol.PHASE_VOTE
+
+    # B and C both vote for A's answer; A votes for B's.
+    def aid_for(voter_conn, author_text):
+        return next(o["answer_id"] for o in voter_conn.game()["answers"] if o["text"] == author_text)
+
+    await b.push(protocol.C_SUBMIT_VOTE, answer_id=aid_for(b, "answer A"))
+    await c.push(protocol.C_SUBMIT_VOTE, answer_id=aid_for(c, "answer A"))
+    await a.push(protocol.C_SUBMIT_VOTE, answer_id=aid_for(a, "answer B"))
+
+    # All votes in -> reveal with scores.
+    gs = a.game()
+    assert gs["phase"] == protocol.PHASE_REVEAL
+    scores = {row["name"]: row["score"] for row in gs["scores"]}
+    assert scores == {"A": 200, "B": 100, "C": 0}
+
+    # Owner advances the (single) round -> final.
+    await a.push(protocol.C_ADVANCE_PHASE)
+    assert a.game()["phase"] == protocol.PHASE_FINAL
+    assert a.game()["scores"][0]["name"] == "A"
+
+    await a.drop(); await b.drop(); await c.drop()
+    await asyncio.gather(ta, tb, tc)
+
+
+async def test_human_host_drives_phases_manually(monkeypatch):
+    monkeypatch.setattr(connection, "WAO_TOTAL_ROUNDS", 1)
+    server = GameServer()
+    a, ta = await open_conn(server)  # host + owner
+    b, tb = await open_conn(server)
+    c, tc = await open_conn(server)
+    await a.push(protocol.C_CREATE_ROOM, name="Host", host_mode=protocol.HOST_HUMAN)
+    code = a.last(protocol.S_ROOM_CREATED)["code"]
+    await b.push(protocol.C_JOIN_ROOM, code=code, name="B")
+    await c.push(protocol.C_JOIN_ROOM, code=code, name="C")
+
+    await a.push(protocol.C_START_GAME)
+    assert a.game()["you_role"] == "host"
+    assert a.game()["contestant_count"] == 2  # host is not a contestant
+    assert b.game()["you_role"] == "contestant"
+
+    # Both contestants answer; with a human host this does NOT auto-advance.
+    await b.push(protocol.C_SUBMIT_ANSWER, text="bee")
+    await c.push(protocol.C_SUBMIT_ANSWER, text="cee")
+    assert a.game()["phase"] == protocol.PHASE_PROMPT
+
+    # The host can't submit answers (not a contestant).
+    await a.push(protocol.C_SUBMIT_ANSWER, text="nope")
+    assert a.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_CONTESTANT
+
+    # Host advances to voting.
+    await a.push(protocol.C_ADVANCE_PHASE)
+    assert b.game()["phase"] == protocol.PHASE_VOTE
+
+    # A non-host cannot advance.
+    await b.push(protocol.C_ADVANCE_PHASE)
+    assert b.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_HOST
+
+    # Contestants vote for each other, host advances to reveal.
+    aid_b = next(o["answer_id"] for o in b.game()["answers"])  # the other answer (cee)
+    aid_c = next(o["answer_id"] for o in c.game()["answers"])  # the other answer (bee)
+    await b.push(protocol.C_SUBMIT_VOTE, answer_id=aid_b)
+    await c.push(protocol.C_SUBMIT_VOTE, answer_id=aid_c)
+    assert b.game()["phase"] == protocol.PHASE_VOTE  # still manual
+    await a.push(protocol.C_ADVANCE_PHASE)
+    assert a.game()["phase"] == protocol.PHASE_REVEAL
+    scores = {row["name"]: row["score"] for row in a.game()["scores"]}
+    assert scores == {"B": 100, "C": 100}
+
+    await a.drop(); await b.drop(); await c.drop()
+    await asyncio.gather(ta, tb, tc)
+
+
+async def test_return_to_lobby_ends_game():
+    server = GameServer()
+    a, ta = await open_conn(server)
+    b, tb = await open_conn(server)
+    await _host_auto_room(server, [a, b], ["A", "B"])
+    await a.push(protocol.C_START_GAME)
+    assert a.room()["in_game"] is True
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)
+    assert protocol.S_RETURN_TO_LOBBY in a.types() and protocol.S_RETURN_TO_LOBBY in b.types()
+    assert a.room()["in_game"] is False
+    assert a.last(protocol.S_GAME_STATE) is not None  # game ran, then torn down
+
+    # Non-owner can't end the game.
+    await a.push(protocol.C_START_GAME)
+    await b.push(protocol.C_RETURN_TO_LOBBY)
+    assert b.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_HOST
+
+    await a.drop(); await b.drop()
+    await asyncio.gather(ta, tb)

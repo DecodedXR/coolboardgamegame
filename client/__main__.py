@@ -38,6 +38,7 @@ class App:
         self.server_port = DEFAULT_CONNECT_PORT
         self.you: Optional[dict[str, Any]] = None
         self.room: Optional[dict[str, Any]] = None
+        self.gamestate: Optional[dict[str, Any]] = None
 
         self.scene: Scene = ConnectScene(self)
         self.scene.on_enter()
@@ -51,6 +52,7 @@ class App:
         if msg["type"] == EVT_DISCONNECTED and not isinstance(self.scene, ConnectScene):
             self.you = None
             self.room = None
+            self.gamestate = None
             self.net = NetClient()  # fresh client for the next attempt
             self.go_to(ConnectScene(self))
 

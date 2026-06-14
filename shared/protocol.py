@@ -31,15 +31,35 @@ C_START_GAME = "start_game"          # {}                (host / human-host or a
 C_LEAVE_ROOM = "leave_room"          # {}
 C_PING = "ping"                      # {}
 
+# --- In-game: Wrong Answers Only (client -> server) -----------------------
+
+C_SUBMIT_ANSWER = "submit_answer"    # {text}            (contestants, prompt phase)
+C_SUBMIT_VOTE = "submit_vote"        # {answer_id}       (contestants, vote phase)
+C_ADVANCE_PHASE = "advance_phase"    # {}                (show-runner: human host / auto owner)
+C_RETURN_TO_LOBBY = "return_to_lobby"  # {}              (show-runner) end game, back to lobby
+
 
 # --- Server -> Client message types ---------------------------------------
 
 S_ROOM_CREATED = "room_created"      # {code, you, room}
 S_ROOM_JOINED = "room_joined"        # {code, you, room}
 S_ROOM_UPDATE = "room_update"        # {room}
-S_GAME_STARTED = "game_started"      # {}  (stub until a minigame plugs in)
+S_GAME_STARTED = "game_started"      # {}  (clients switch to the minigame scene)
+S_GAME_STATE = "game_state"          # {game}  (per-player view, broadcast on every change)
+S_RETURN_TO_LOBBY = "return_to_lobby"  # {}  (game ended; clients return to the lobby)
 S_ERROR = "error"                    # {code, message}
 S_PONG = "pong"                      # {}
+
+
+# --- Game identifiers -----------------------------------------------------
+
+GAME_WRONG_ANSWERS = "wrong_answers"
+
+# Game phases (value of game["phase"] in an S_GAME_STATE payload).
+PHASE_PROMPT = "prompt"   # contestants type an answer
+PHASE_VOTE = "vote"       # contestants vote on the (anonymized) answers
+PHASE_REVEAL = "reveal"   # authorship + votes + round scores revealed
+PHASE_FINAL = "final"     # final scoreboard
 
 
 # --- Error codes ----------------------------------------------------------
@@ -53,6 +73,12 @@ ERR_NOT_HOST = "not_host"
 ERR_BAD_HOST_MODE = "bad_host_mode"
 ERR_BAD_TARGET = "bad_target"
 ERR_GAME_IN_PROGRESS = "game_in_progress"
+ERR_NOT_ENOUGH_PLAYERS = "not_enough_players"
+ERR_NO_GAME = "no_game"
+ERR_WRONG_PHASE = "wrong_phase"
+ERR_NOT_CONTESTANT = "not_contestant"
+ERR_BAD_ANSWER = "bad_answer"
+ERR_BAD_VOTE = "bad_vote"
 
 
 def encode(msg_type: str, **payload: Any) -> str:

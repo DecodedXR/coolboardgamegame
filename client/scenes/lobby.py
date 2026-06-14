@@ -107,8 +107,9 @@ class LobbyScene(Scene):
         if t == protocol.S_ROOM_UPDATE:
             self.app.room = msg["room"]
         elif t == protocol.S_GAME_STARTED:
-            from client.scenes.ingame_stub import IngameStubScene
-            self.app.go_to(IngameStubScene(self.app))
+            self.app.gamestate = None
+            from client.scenes.wrong_answers import WrongAnswersScene
+            self.app.go_to(WrongAnswersScene(self.app))
         elif t == protocol.S_ERROR:
             self.status = msg.get("message", "error")
 
