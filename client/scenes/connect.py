@@ -1,4 +1,9 @@
-"""Connect screen: enter server address + display name, then connect."""
+"""Connect screen: enter server URL + display name, then connect.
+
+The primary field is a single **server URL** (``ws://``/``wss://``, prefilled
+with the baked-in default). Host/port inputs remain below as a LAN fallback,
+used only when the URL field is left blank.
+"""
 
 from __future__ import annotations
 
@@ -9,39 +14,49 @@ import pygame
 from client import net
 from client import ui
 from client.scenes.base import Scene
-from config import DEFAULT_CONNECT_HOST, DEFAULT_CONNECT_PORT
+from config import DEFAULT_SERVER_URL, DEFAULT_CONNECT_HOST, DEFAULT_CONNECT_PORT
 
 
 class ConnectScene(Scene):
     def on_enter(self) -> None:
         cx = self.app.width // 2
-        self.host_in = ui.TextInput((cx - 180, 200, 240, 40), placeholder="server host",
-                                    text=DEFAULT_CONNECT_HOST)
-        self.port_in = ui.TextInput((cx + 70, 200, 110, 40), placeholder="port",
-                                    text=str(DEFAULT_CONNECT_PORT), max_len=5)
-        self.name_in = ui.TextInput((cx - 180, 270, 360, 40), placeholder="your name",
+        default_url = self.app.server_url or DEFAULT_SERVER_URL or net.build_ws_url(
+            DEFAULT_CONNECT_HOST, DEFAULT_CONNECT_PORT)
+        self.name_in = ui.TextInput((cx - 180, 195, 360, 40), placeholder="your name",
                                     text=self.app.name, max_len=24)
-        self.connect_btn = ui.Button("CONNECT", (cx - 100, 340, 200, 48), self._connect)
+        self.url_in = ui.TextInput((cx - 180, 265, 360, 40), placeholder="ws:// or wss:// server URL",
+                                   text=default_url, max_len=120)
+        # Advanced LAN fallback — only consulted when the URL field is blank.
+        self.host_in = ui.TextInput((cx - 180, 345, 240, 36), placeholder="host",
+                                    text=DEFAULT_CONNECT_HOST)
+        self.port_in = ui.TextInput((cx + 70, 345, 110, 36), placeholder="port",
+                                    text=str(DEFAULT_CONNECT_PORT), max_len=5)
+        self.connect_btn = ui.Button("CONNECT", (cx - 100, 405, 200, 48), self._connect)
         self.status = ""
         self.connecting = False
 
     def _connect(self) -> None:
         if self.connecting:
             return
-        host = self.host_in.text.strip() or DEFAULT_CONNECT_HOST
-        try:
-            port = int(self.port_in.text.strip())
-        except ValueError:
-            self.status = "port must be a number"
-            return
         self.app.name = self.name_in.text.strip() or "Anonymous"
-        self.app.server_host, self.app.server_port = host, port
-        self.status = f"connecting to {host}:{port} ..."
+        url_text = self.url_in.text.strip()
+        if url_text:
+            url = net.build_ws_url(url_text)
+        else:
+            host = self.host_in.text.strip() or DEFAULT_CONNECT_HOST
+            try:
+                port = int(self.port_in.text.strip())
+            except ValueError:
+                self.status = "port must be a number"
+                return
+            url = net.build_ws_url(host, port)
+        self.app.server_url = url
+        self.status = f"connecting to {url} ..."
         self.connecting = True
-        self.app.net.connect(host, port)
+        self.app.net.connect(url)
 
     def handle_event(self, event: pygame.event.Event) -> None:
-        for w in (self.host_in, self.port_in, self.name_in):
+        for w in (self.name_in, self.url_in, self.host_in, self.port_in):
             w.handle(event)
         self.connect_btn.handle(event)
 
@@ -49,16 +64,28 @@ class ConnectScene(Scene):
         if msg["type"] == net.EVT_CONNECTED:
             from client.scenes.menu import MenuScene
             self.app.go_to(MenuScene(self.app))
+        elif msg["type"] == net.EVT_CONNECTING:
+            # A free cloud instance may be waking from sleep — keep the user posted.
+            self.status = f"waking the server… (attempt {msg.get('attempt', 1)})"
         elif msg["type"] == net.EVT_CONNECT_FAILED:
             self.status = f"connection failed: {msg.get('error', '')}"
             self.connecting = False
+            # The failed client's thread has finished but its `connect()` guard
+            # would block any retry, so swap in a fresh one (mirrors how the App
+            # recycles the client on EVT_DISCONNECTED). Without this the connect
+            # screen dead-ends after one failure until the app is restarted.
+            self.app.net = net.NetClient()
 
     def draw(self, surf: pygame.Surface) -> None:
         surf.fill(ui.BG)
-        ui.Label("THE SCUFFED GAMESHOW", (self.app.width // 2, 110), 40, ui.ACCENT, center=True).draw(surf)
-        ui.Label("connect to a server", (self.app.width // 2, 155), 20, ui.MUTED, center=True).draw(surf)
-        for w in (self.host_in, self.port_in, self.name_in):
+        cx = self.app.width // 2
+        ui.Label("THE SCUFFED GAMESHOW", (cx, 110), 40, ui.ACCENT, center=True).draw(surf)
+        ui.Label("connect to a server", (cx, 155), 20, ui.MUTED, center=True).draw(surf)
+        ui.Label("server URL", (cx - 180, 245), 15, ui.MUTED).draw(surf)
+        ui.Label("advanced — LAN host/port (used only if URL is blank)",
+                 (cx - 180, 325), 14, ui.MUTED).draw(surf)
+        for w in (self.name_in, self.url_in, self.host_in, self.port_in):
             w.draw(surf)
         self.connect_btn.draw(surf)
         if self.status:
-            ui.Label(self.status, (self.app.width // 2, 410), 18, ui.MUTED, center=True).draw(surf)
+            ui.Label(self.status, (cx, 475), 18, ui.MUTED, center=True).draw(surf)

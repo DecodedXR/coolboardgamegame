@@ -12,9 +12,22 @@ import os
 SERVER_HOST = os.environ.get("HOST", "0.0.0.0")
 SERVER_PORT = int(os.environ.get("PORT", "8765"))
 
-# Default address the client tries first (overridable in the connect screen).
+# Default server the client tries first. A full ``ws://``/``wss://`` URL is the
+# primary form (Milestone 3 bakes the deployed ``wss://...onrender.com`` URL in
+# here); when blank, the connect screen falls back to the host/port below. The
+# host/port remain the LAN-testing path.
+DEFAULT_SERVER_URL = os.environ.get("SERVER_URL", "")
 DEFAULT_CONNECT_HOST = os.environ.get("CONNECT_HOST", "localhost")
 DEFAULT_CONNECT_PORT = int(os.environ.get("CONNECT_PORT", str(SERVER_PORT)))
+
+# Cold-start tolerance. A sleeping free-tier cloud instance (e.g. Render) can
+# take 30–60s to wake, so the initial connect uses a generous per-attempt
+# timeout and retries with linear backoff before giving up. LAN connects still
+# succeed on the first attempt and never wait.
+CONNECT_OPEN_TIMEOUT = 12.0       # seconds per websockets.connect attempt
+CONNECT_MAX_ATTEMPTS = 6          # total attempts before surfacing failure
+CONNECT_RETRY_BACKOFF = 2.0       # base seconds between attempts (grows linearly)
+CONNECT_RETRY_BACKOFF_MAX = 8.0   # cap on the inter-attempt delay
 
 # Room sizing and lifecycle.
 MAX_PLAYERS_PER_ROOM = 8

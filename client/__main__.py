@@ -12,10 +12,10 @@ from typing import Any, Optional
 
 import pygame
 
-from client.net import NetClient, EVT_DISCONNECTED
+from client.net import NetClient, EVT_DISCONNECTED, build_ws_url
 from client.scenes.base import Scene
 from client.scenes.connect import ConnectScene
-from config import DEFAULT_CONNECT_HOST, DEFAULT_CONNECT_PORT
+from config import DEFAULT_SERVER_URL, DEFAULT_CONNECT_HOST, DEFAULT_CONNECT_PORT
 
 WIDTH, HEIGHT = 820, 560
 FPS = 60
@@ -34,8 +34,8 @@ class App:
 
         # Session state, shared across scenes.
         self.name = "Player"
-        self.server_host = DEFAULT_CONNECT_HOST
-        self.server_port = DEFAULT_CONNECT_PORT
+        self.server_url = DEFAULT_SERVER_URL or build_ws_url(
+            DEFAULT_CONNECT_HOST, DEFAULT_CONNECT_PORT)
         self.you: Optional[dict[str, Any]] = None
         self.room: Optional[dict[str, Any]] = None
         self.gamestate: Optional[dict[str, Any]] = None
