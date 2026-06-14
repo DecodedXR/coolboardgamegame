@@ -41,6 +41,17 @@ def test_case_insensitive_scheme():
     assert build_ws_url("HTTPS://app.onrender.com") == "wss://app.onrender.com"
 
 
+def test_baked_default_server_url_is_secure_and_normalized():
+    """The Milestone-3 baked-in default (config.DEFAULT_SERVER_URL) must be a
+    real ``wss://`` URL that build_ws_url passes through unchanged — guards
+    against a typo'd scheme (e.g. plain ``ws://`` or ``https://``) silently
+    shipping in the client default."""
+    from config import DEFAULT_SERVER_URL
+
+    assert DEFAULT_SERVER_URL.startswith("wss://")  # TLS to the cloud server
+    assert build_ws_url(DEFAULT_SERVER_URL) == DEFAULT_SERVER_URL
+
+
 def test_connect_is_single_use():
     """connect() must no-op once a thread has been spawned. This is *why* the
     connect screen recycles the NetClient after EVT_CONNECT_FAILED — reusing a

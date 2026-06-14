@@ -13,10 +13,11 @@ SERVER_HOST = os.environ.get("HOST", "0.0.0.0")
 SERVER_PORT = int(os.environ.get("PORT", "8765"))
 
 # Default server the client tries first. A full ``ws://``/``wss://`` URL is the
-# primary form (Milestone 3 bakes the deployed ``wss://...onrender.com`` URL in
-# here); when blank, the connect screen falls back to the host/port below. The
-# host/port remain the LAN-testing path.
-DEFAULT_SERVER_URL = os.environ.get("SERVER_URL", "")
+# primary form: Milestone 3 baked the deployed Render URL in here so the friend's
+# flow is just launch → name → join code (no address to type, no ngrok). Override
+# with ``SERVER_URL`` (e.g. set it empty for LAN) and the connect screen falls back
+# to the host/port below — the LAN-testing path.
+DEFAULT_SERVER_URL = os.environ.get("SERVER_URL", "wss://coolboardgamegame.onrender.com")
 DEFAULT_CONNECT_HOST = os.environ.get("CONNECT_HOST", "localhost")
 DEFAULT_CONNECT_PORT = int(os.environ.get("CONNECT_PORT", str(SERVER_PORT)))
 

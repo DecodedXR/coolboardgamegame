@@ -20,6 +20,12 @@ prompts, judges, torments contestants) or the room can run **host-less / automat
   can't see who wrote what, and can't vote for your own). Driven either by a
   **human host** (manual *reveal / next* control) or the **auto host** (per-phase
   countdown timers that also fast-forward once everyone has acted).
+- **Milestone 3 — true online (cloud-hosted) ✅** The server is deployed on
+  **Render** (free tier) at `wss://coolboardgamegame.onrender.com` and is the
+  client's baked-in default — nobody runs a server or a tunnel. Joining is now
+  just: launch the client → type a name → enter the room code. (A sleeping
+  free instance takes ~30–60s to wake on the first connect; the client shows a
+  "waking the server…" status and retries.)
 
 ```
 shared/protocol.py    wire format (message types + JSON encode/decode), shared by both sides
@@ -78,11 +84,16 @@ python -m pip install -r requirements.txt
    clicks **START GAME** to launch Wrong Answers Only (see *Playing Wrong Answers
    Only* above).
 
-## Cloud later
+## Cloud (live)
 
-The server reads `HOST`/`PORT` from the environment and binds `0.0.0.0`, so it runs
-unchanged on Render/Railway/a VPS (which inject `$PORT`). Going "true online" is then
-just pointing the client's connect screen at the deployed URL — no code changes.
+The server is hosted on **Render** at `wss://coolboardgamegame.onrender.com` and is
+the client's default — to play online you don't run anything server-side, just
+launch the client and join a code. The deploy is config-only (`render.yaml` +
+`Dockerfile`): the server reads `HOST`/`PORT` from the environment and binds
+`0.0.0.0`, so the identical `python -m server` runs on LAN and on any host that
+injects `$PORT` (Render/Railway/a VPS); TLS is terminated at the platform proxy, so
+the app still speaks plain `ws`. To run fully on a LAN instead, clear the URL field
+on the connect screen (or set `SERVER_URL=`) and use the host/port fallback.
 
 ## Tests
 
