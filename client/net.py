@@ -20,10 +20,17 @@ from __future__ import annotations
 
 import asyncio
 import queue
-import threading
+import sys
 from typing import Any, Optional
 
-import websockets
+# Desktop-only deps. Under pygbag/Emscripten there are no OS threads and no
+# CPython ``websockets`` lib, so these must never be imported in the browser —
+# the browser path (see ``client.net_browser``) drives the native JS WebSocket
+# instead. ``asyncio``/``queue`` are pure-Python/pygbag-patched and stay above.
+if sys.platform != "emscripten":
+    import threading
+
+    import websockets
 
 from shared import protocol
 from config import (
@@ -70,7 +77,21 @@ def build_ws_url(server: str, port: Optional[int] = None) -> str:
 
 
 class NetClient:
+    """Client transport with the same public surface on every platform.
+
+    On desktop it runs the websocket on a background thread (below). Under
+    pygbag/Emscripten it delegates to a single-loop :class:`~client.net_browser.BrowserNet`
+    over the browser's native WebSocket — selected once here so the scenes, the
+    connect screen, and the App loop are identical on both.
+    """
+
     def __init__(self) -> None:
+        if sys.platform == "emscripten":
+            from client.net_browser import BrowserNet
+
+            self._browser: Optional[Any] = BrowserNet()
+            return
+        self._browser = None
         self._inbox: "queue.Queue[dict[str, Any]]" = queue.Queue()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._ws: Optional[Any] = None
@@ -84,6 +105,8 @@ class NetClient:
 
         ``url`` is a full websocket URL (use :func:`build_ws_url` to make one).
         """
+        if self._browser is not None:
+            return self._browser.connect(url)
         if self._thread is not None:
             return
         self._thread = threading.Thread(target=self._run, args=(url,), daemon=True)
@@ -91,11 +114,15 @@ class NetClient:
 
     @property
     def is_connected(self) -> bool:
+        if self._browser is not None:
+            return self._browser.is_connected
         return self._connected.is_set()
 
     def send(self, msg_type: str, **payload: Any) -> None:
         """Queue a message to the server. Safe to call before connect finishes;
         dropped if the socket isn't up yet."""
+        if self._browser is not None:
+            return self._browser.send(msg_type, **payload)
         if self._loop is None or self._ws is None:
             return
         data = protocol.encode(msg_type, **payload)
@@ -103,6 +130,8 @@ class NetClient:
 
     def poll(self) -> list[dict[str, Any]]:
         """Drain all pending inbound messages without blocking."""
+        if self._browser is not None:
+            return self._browser.poll()
         out: list[dict[str, Any]] = []
         while True:
             try:
@@ -112,6 +141,8 @@ class NetClient:
         return out
 
     def close(self) -> None:
+        if self._browser is not None:
+            return self._browser.close()
         if self._loop is not None and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self._shutdown(), self._loop)
 
