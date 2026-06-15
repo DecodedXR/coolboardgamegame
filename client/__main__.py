@@ -8,6 +8,7 @@ network messages, update, draw. Both event streams are forwarded to the active
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Optional
 
 import pygame
@@ -56,7 +57,7 @@ class App:
             self.net = NetClient()  # fresh client for the next attempt
             self.go_to(ConnectScene(self))
 
-    def run(self) -> None:
+    async def run_async(self) -> None:
         while self.running:
             dt = self.clock.tick(FPS) / 1000.0
             for event in pygame.event.get():
@@ -70,13 +71,16 @@ class App:
             self.scene.update(dt)
             self.scene.draw(self.surface)
             pygame.display.flip()
+            # Yield to the event loop each frame. Required under pygbag/Emscripten
+            # (the browser drives the loop); a harmless no-op cost on desktop.
+            await asyncio.sleep(0)
 
         self.net.close()
         pygame.quit()
 
 
 def main() -> None:
-    App().run()
+    asyncio.run(App().run_async())
 
 
 if __name__ == "__main__":
