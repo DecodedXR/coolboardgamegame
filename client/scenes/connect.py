@@ -11,6 +11,7 @@ from typing import Any
 
 import pygame
 
+from client import browser_io
 from client import net
 from client import ui
 from client.scenes.base import Scene
@@ -20,17 +21,25 @@ from config import DEFAULT_SERVER_URL, DEFAULT_CONNECT_HOST, DEFAULT_CONNECT_POR
 class ConnectScene(Scene):
     def on_enter(self) -> None:
         cx = self.app.width // 2
-        default_url = self.app.server_url or DEFAULT_SERVER_URL or net.build_ws_url(
-            DEFAULT_CONNECT_HOST, DEFAULT_CONNECT_PORT)
+        self.browser = browser_io.is_browser()
         self.name_in = ui.TextInput((cx - 180, 195, 360, 40), placeholder="your name",
                                     text=self.app.name, max_len=24)
-        self.url_in = ui.TextInput((cx - 180, 265, 360, 40), placeholder="ws:// or wss:// server URL",
-                                   text=default_url, max_len=120)
-        # Advanced LAN fallback — only consulted when the URL field is blank.
-        self.host_in = ui.TextInput((cx - 180, 345, 240, 36), placeholder="host",
-                                    text=DEFAULT_CONNECT_HOST)
-        self.port_in = ui.TextInput((cx + 70, 345, 110, 36), placeholder="port",
-                                    text=str(DEFAULT_CONNECT_PORT), max_len=5)
+        if self.browser:
+            # In the browser the server is always the baked URL — collapse the
+            # screen to just name → CONNECT (no URL / LAN fields to type).
+            self.url_in = self.host_in = self.port_in = None
+            self.fields = [self.name_in]
+        else:
+            default_url = self.app.server_url or DEFAULT_SERVER_URL or net.build_ws_url(
+                DEFAULT_CONNECT_HOST, DEFAULT_CONNECT_PORT)
+            self.url_in = ui.TextInput((cx - 180, 265, 360, 40), placeholder="ws:// or wss:// server URL",
+                                       text=default_url, max_len=120)
+            # Advanced LAN fallback — only consulted when the URL field is blank.
+            self.host_in = ui.TextInput((cx - 180, 345, 240, 36), placeholder="host",
+                                        text=DEFAULT_CONNECT_HOST)
+            self.port_in = ui.TextInput((cx + 70, 345, 110, 36), placeholder="port",
+                                        text=str(DEFAULT_CONNECT_PORT), max_len=5)
+            self.fields = [self.name_in, self.url_in, self.host_in, self.port_in]
         self.connect_btn = ui.Button("CONNECT", (cx - 100, 405, 200, 48), self._connect)
         self.status = ""
         self.connecting = False
@@ -39,24 +48,27 @@ class ConnectScene(Scene):
         if self.connecting:
             return
         self.app.name = self.name_in.text.strip() or "Anonymous"
-        url_text = self.url_in.text.strip()
-        if url_text:
-            url = net.build_ws_url(url_text)
+        if self.browser:
+            url = self.app.server_url or DEFAULT_SERVER_URL
         else:
-            host = self.host_in.text.strip() or DEFAULT_CONNECT_HOST
-            try:
-                port = int(self.port_in.text.strip())
-            except ValueError:
-                self.status = "port must be a number"
-                return
-            url = net.build_ws_url(host, port)
+            url_text = self.url_in.text.strip()
+            if url_text:
+                url = net.build_ws_url(url_text)
+            else:
+                host = self.host_in.text.strip() or DEFAULT_CONNECT_HOST
+                try:
+                    port = int(self.port_in.text.strip())
+                except ValueError:
+                    self.status = "port must be a number"
+                    return
+                url = net.build_ws_url(host, port)
         self.app.server_url = url
         self.status = f"connecting to {url} ..."
         self.connecting = True
         self.app.net.connect(url)
 
     def handle_event(self, event: pygame.event.Event) -> None:
-        for w in (self.name_in, self.url_in, self.host_in, self.port_in):
+        for w in self.fields:
             w.handle(event)
         self.connect_btn.handle(event)
 
@@ -81,10 +93,11 @@ class ConnectScene(Scene):
         cx = self.app.width // 2
         ui.Label("THE SCUFFED GAMESHOW", (cx, 110), 40, ui.ACCENT, center=True).draw(surf)
         ui.Label("connect to a server", (cx, 155), 20, ui.MUTED, center=True).draw(surf)
-        ui.Label("server URL", (cx - 180, 245), 15, ui.MUTED).draw(surf)
-        ui.Label("advanced — LAN host/port (used only if URL is blank)",
-                 (cx - 180, 325), 14, ui.MUTED).draw(surf)
-        for w in (self.name_in, self.url_in, self.host_in, self.port_in):
+        if not self.browser:
+            ui.Label("server URL", (cx - 180, 245), 15, ui.MUTED).draw(surf)
+            ui.Label("advanced — LAN host/port (used only if URL is blank)",
+                     (cx - 180, 325), 14, ui.MUTED).draw(surf)
+        for w in self.fields:
             w.draw(surf)
         self.connect_btn.draw(surf)
         if self.status:

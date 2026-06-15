@@ -11,6 +11,8 @@ from typing import Callable, Optional
 
 import pygame
 
+from client import browser_io
+
 # Palette — a moody gameshow look.
 BG = (18, 18, 28)
 PANEL = (32, 33, 48)
@@ -88,6 +90,16 @@ class TextInput:
         self.focused = False
 
     def handle(self, event: pygame.event.Event) -> None:
+        if browser_io.is_browser():
+            # The phone soft keyboard can't focus the canvas, so key events never
+            # arrive. Tapping the field opens the browser's native prompt instead.
+            if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
+                    and self.rect.collidepoint(event.pos)):
+                value = browser_io.prompt(self.placeholder or "enter text", self.text)
+                if self.upper:
+                    value = value.upper()
+                self.text = value[: self.max_len]
+            return
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             self.focused = self.rect.collidepoint(event.pos)
         elif event.type == pygame.KEYDOWN and self.focused:

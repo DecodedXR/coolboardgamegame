@@ -148,11 +148,14 @@ class BrowserBridge:
 
     @staticmethod
     def prompt(label: str, current: str = "") -> str:
-        """Native browser text entry — the mobile soft-keyboard workaround (W4)."""
-        import platform
+        """Native browser text entry — the mobile soft-keyboard workaround (W4).
 
-        result = platform.window.prompt(label, current)
-        return str(result) if result is not None else current
+        Single definition lives in :mod:`client.browser_io`; kept here as a thin
+        delegate so the spike-era call site keeps working.
+        """
+        from client import browser_io
+
+        return browser_io.prompt(label, current)
 
 
 class BrowserNet:
