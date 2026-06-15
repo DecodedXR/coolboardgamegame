@@ -10,6 +10,13 @@ from __future__ import annotations
 
 import asyncio
 
+# pygbag decides which WASM packages to bundle by scanning THIS entry file's
+# imports. pygame is otherwise only imported deep inside client/, which the
+# scanner never sees, so without this line pygbag ships no pygame-ce and the app
+# dies on the first `pygame.init()` with "module 'pygame' has no attribute 'init'".
+# Desktop ignores the unused import.
+import pygame  # noqa: F401
+
 from client.__main__ import App
 
 
