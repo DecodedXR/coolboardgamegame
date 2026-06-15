@@ -7,6 +7,10 @@ __pycache__/
 venv/
 env/
 
+# pygbag / WASM build output (Tier 4 browser spike) — generated, never committed
+spike/build/
+.pygbag-venv/
+
 # OS / editor
 .DS_Store
 Thumbs.db

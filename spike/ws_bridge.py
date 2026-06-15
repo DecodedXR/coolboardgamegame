@@ -33,42 +33,54 @@ _SEP = "\x00"
 
 
 class BrowserWS:
-    """Native-``WebSocket`` backend, used when running under pygbag/Emscripten."""
+    """Native-``WebSocket`` backend, used when running under pygbag/Emscripten.
+
+    The JS globals are named ``cbgg_*`` (NOT ``__cbgg_*``): a leading double
+    underscore on an identifier written inside a class body is name-mangled by
+    Python (``platform.window.__x`` becomes ``platform.window._BrowserWS__x``),
+    which would look up the wrong — undefined — JS property and crash the app.
+    """
 
     def __init__(self) -> None:
         self._connected = False  # whether the JS shim has been installed yet
+        self._error = False      # eval/interop failed at install time
 
     def connect(self, url: str) -> None:
         import platform  # pygbag-provided in the browser; exposes the JS window
 
         # Install the shim once. URL is JSON-quoted so it is safely embedded.
         js = """
-        window.__cbgg_inbox = [];
-        window.__cbgg_state = "connecting";
+        window.cbgg_inbox = [];
+        window.cbgg_state = "connecting";
         try {
             // Detach + close any prior socket first, so a late onclose/onerror
             // from a dropped connection can't clobber the new socket's state
             // (which would make the main loop's reconnect logic flap).
-            var prev = window.__cbgg_ws;
+            var prev = window.cbgg_ws;
             if (prev) {
                 prev.onopen = prev.onmessage = prev.onclose = prev.onerror = null;
                 try { prev.close(); } catch (e) {}
             }
             var ws = new WebSocket(%s);
-            window.__cbgg_ws = ws;
-            ws.onopen    = function()  { window.__cbgg_state = "open"; };
-            ws.onmessage = function(e) { window.__cbgg_inbox.push(e.data); };
-            ws.onclose   = function()  { window.__cbgg_state = "closed"; };
-            ws.onerror   = function()  { window.__cbgg_state = "error"; };
-            window.__cbgg_send  = function(t) { if (ws.readyState === 1) ws.send(t); };
-            window.__cbgg_drain = function() {
-                var a = window.__cbgg_inbox; window.__cbgg_inbox = [];
+            window.cbgg_ws = ws;
+            ws.onopen    = function()  { window.cbgg_state = "open"; };
+            ws.onmessage = function(e) { window.cbgg_inbox.push(e.data); };
+            ws.onclose   = function()  { window.cbgg_state = "closed"; };
+            ws.onerror   = function()  { window.cbgg_state = "error"; };
+            window.cbgg_send  = function(t) { if (ws.readyState === 1) ws.send(t); };
+            window.cbgg_drain = function() {
+                var a = window.cbgg_inbox; window.cbgg_inbox = [];
                 return a.join("\\u0000");
             };
-        } catch (err) { window.__cbgg_state = "error"; }
+        } catch (err) { window.cbgg_state = "error"; }
         """ % json.dumps(url)
-        platform.window.eval(js)
-        self._connected = True
+        try:
+            platform.window.eval(js)
+            self._connected = True
+            self._error = False
+        except Exception as exc:  # eval/window interop unavailable
+            print("BrowserWS.connect error:", exc)
+            self._error = True
 
     def reconnect(self, url: str) -> None:
         """Re-open after a drop. The shim is idempotent — just rebuild it."""
@@ -76,18 +88,28 @@ class BrowserWS:
 
     @property
     def state(self) -> str:
+        if self._error:
+            return "error"
         if not self._connected:
             return "connecting"
         import platform
 
-        return str(platform.window.__cbgg_state)
+        try:
+            return str(platform.window.cbgg_state)
+        except Exception as exc:  # surface, don't black-screen the HUD
+            print("BrowserWS.state error:", exc)
+            return "error"
 
     def poll(self) -> list[str]:
         if not self._connected:
             return []
         import platform
 
-        packed = platform.window.__cbgg_drain()
+        try:
+            packed = platform.window.cbgg_drain()
+        except Exception as exc:
+            print("BrowserWS.poll error:", exc)
+            return []
         text = str(packed) if packed is not None else ""
         return text.split(_SEP) if text else []
 
@@ -96,7 +118,10 @@ class BrowserWS:
             return
         import platform
 
-        platform.window.__cbgg_send(text)
+        try:
+            platform.window.cbgg_send(text)
+        except Exception as exc:
+            print("BrowserWS.send error:", exc)
 
     @staticmethod
     def prompt(label: str, current: str = "") -> str:
