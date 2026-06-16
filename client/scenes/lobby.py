@@ -15,19 +15,24 @@ from client import ui
 from client.scenes.base import Scene
 from shared import protocol
 
-_ROW_TOP = 200
+_ROW_TOP = 185
 _ROW_H = 46
-_LIST_X = 60
-_LIST_W = 460
+_LIST_X = 24
+_LIST_W = 432
+
+# Bottom control bar: a 2x2 grid of buttons spanning the content width.
+_CTRL_X2 = 248          # left edge of the right-hand column
+_CTRL_W = 208
+_CTRL_Y1 = 600
+_CTRL_Y2 = 658
 
 
 class LobbyScene(Scene):
     def on_enter(self) -> None:
-        w = self.app.width
-        self.ready_btn = ui.Button("READY", (w - 280, 200, 200, 44), self._toggle_ready)
-        self.mode_btn = ui.Button("HOST MODE", (w - 280, 256, 200, 44), self._toggle_mode)
-        self.start_btn = ui.Button("START GAME", (w - 280, 330, 200, 52), self._start)
-        self.leave_btn = ui.Button("LEAVE", (w - 280, 470, 200, 40), self._leave)
+        self.ready_btn = ui.Button("READY", (_LIST_X, _CTRL_Y1, _CTRL_W, 50), self._toggle_ready)
+        self.mode_btn = ui.Button("HOST MODE", (_CTRL_X2, _CTRL_Y1, _CTRL_W, 50), self._toggle_mode)
+        self.start_btn = ui.Button("START GAME", (_LIST_X, _CTRL_Y2, _CTRL_W, 50), self._start)
+        self.leave_btn = ui.Button("LEAVE", (_CTRL_X2, _CTRL_Y2, _CTRL_W, 50), self._leave)
         self.status = ""
 
     # --- derived authority -----------------------------------------------
@@ -118,9 +123,9 @@ class LobbyScene(Scene):
         room = self.room
         code = room.get("code", "????")
         mode = room.get("host_mode", "?")
-        ui.Label(f"ROOM {code}", (_LIST_X, 70), 40, ui.ACCENT).draw(surf)
-        ui.Label(f"host mode: {mode}", (_LIST_X, 120), 20, ui.MUTED).draw(surf)
-        ui.Label("PLAYERS", (_LIST_X, 165), 20, ui.MUTED).draw(surf)
+        ui.Label(f"ROOM {code}", (_LIST_X, 56), 40, ui.ACCENT).draw(surf)
+        ui.Label(f"host mode: {mode}", (_LIST_X, 106), 18, ui.MUTED).draw(surf)
+        ui.Label("PLAYERS", (_LIST_X, 150), 18, ui.MUTED).draw(surf)
 
         for p, rect in self._row_rects():
             pygame.draw.rect(surf, ui.PANEL, rect, border_radius=8)
@@ -138,7 +143,11 @@ class LobbyScene(Scene):
             if p["ready"]:
                 ui.Label("READY", (rect.right - 80, rect.centery - 9), 18, ui.GOOD).draw(surf)
 
-        # Right-hand control column.
+        if self.is_host:
+            ui.Label("click a player to pass host", (_LIST_X, _ROW_TOP + len(room.get("players", [])) * _ROW_H + 6),
+                     16, ui.MUTED).draw(surf)
+
+        # Bottom control bar (2x2 grid).
         self.ready_btn.label = "UNREADY" if self.me.get("ready") else "READY"
         self.ready_btn.draw(surf)
         if self.is_owner:
@@ -146,12 +155,9 @@ class LobbyScene(Scene):
             self.mode_btn.draw(surf)
         self.start_btn.enabled = self._can_start()
         self.start_btn.draw(surf)
+        self.leave_btn.draw(surf)
         if not self.start_btn.enabled:
             who = "host" if mode == protocol.HOST_HUMAN else "owner"
-            ui.Label(f"only the {who} can start", (self.app.width - 280, 390), 16, ui.MUTED).draw(surf)
-        if self.is_host:
-            ui.Label("click a player to pass host", (_LIST_X, _ROW_TOP + len(room.get("players", [])) * _ROW_H + 6),
-                     16, ui.MUTED).draw(surf)
-        self.leave_btn.draw(surf)
+            ui.Label(f"only the {who} can start", (_LIST_X, _CTRL_Y2 + 56), 14, ui.MUTED).draw(surf)
         if self.status:
-            ui.Label(self.status, (self.app.width - 280, 430), 16, ui.ACCENT).draw(surf)
+            ui.Label(self.status, (_LIST_X, _CTRL_Y2 + 78), 14, ui.ACCENT).draw(surf)

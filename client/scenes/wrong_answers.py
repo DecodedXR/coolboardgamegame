@@ -25,21 +25,26 @@ from client import ui
 from client.scenes.base import Scene
 from shared import protocol
 
-_MARGIN = 50
-_SCORE_W = 220
+_MARGIN = 24
+
+# Single portrait column: content spans the full width between the margins (no side
+# scoreboard column — scores show as a compact strip in the header instead).
+def _content_w(app) -> int:
+    return app.width - _MARGIN * 2
 
 
 class WrongAnswersScene(Scene):
     def on_enter(self) -> None:
         w, h = self.app.width, self.app.height
+        cw = _content_w(self.app)
         self.answer_input = ui.TextInput(
-            (_MARGIN, 250, w - _MARGIN * 2 - _SCORE_W, 46),
+            (_MARGIN, 250, cw, 48),
             placeholder="type your (wrong) answer", max_len=80,
         )
-        self.submit_btn = ui.Button("SUBMIT", (_MARGIN, 310, 200, 46), self._submit_answer)
-        self.advance_btn = ui.Button("NEXT", (w - _MARGIN - 200, h - 70, 200, 48), self._advance)
-        self.return_btn = ui.Button("BACK TO LOBBY", (w - _MARGIN - 220, h - 70, 220, 48), self._return_to_lobby)
-        self.leave_btn = ui.Button("LEAVE", (_MARGIN, h - 70, 120, 40), self._leave)
+        self.submit_btn = ui.Button("SUBMIT", (_MARGIN, 312, 200, 48), self._submit_answer)
+        self.advance_btn = ui.Button("NEXT", (w - _MARGIN - 200, h - 70, 200, 50), self._advance)
+        self.return_btn = ui.Button("BACK TO LOBBY", (w - _MARGIN - 220, h - 70, 220, 50), self._return_to_lobby)
+        self.leave_btn = ui.Button("LEAVE", (_MARGIN, h - 70, 120, 44), self._leave)
         self.vote_buttons: list[tuple[str, ui.Button]] = []
         self._build_vote_buttons()
 
@@ -110,10 +115,10 @@ class WrongAnswersScene(Scene):
         self.vote_buttons = []
         if self.phase != protocol.PHASE_VOTE or self.role != "contestant":
             return
-        y = 200
+        y = 250
         for opt in self.gs.get("answers", []):
             aid = opt["answer_id"]
-            rect = (_MARGIN, y, self.app.width - _MARGIN * 2 - _SCORE_W, 46)
+            rect = (_MARGIN, y, _content_w(self.app), 46)
             self.vote_buttons.append((aid, ui.Button(opt["text"], rect, lambda a=aid: self._vote(a))))
             y += 54
 
@@ -177,70 +182,70 @@ class WrongAnswersScene(Scene):
         ui.Label("WRONG ANSWERS ONLY", (_MARGIN, 28), 26, ui.ACCENT).draw(surf)
         rnd = f"round {self.gs.get('round', 1)}/{self.gs.get('total_rounds', 1)}"
         ui.Label(f"{rnd}  ·  {self.phase}", (_MARGIN, 64), 18, ui.MUTED).draw(surf)
-        # Auto-mode countdown.
         deadline = self.gs.get("deadline")
         if deadline:
             remaining = max(0, math.ceil(deadline - time.time()))
             ui.Label(f"{remaining}s", (self.app.width - _MARGIN, 28), 30,
-                     ui.GOOD if remaining > 5 else ui.ACCENT, center=False).draw(surf)
-        # Prompt (the through-line for prompt/vote/reveal).
+                     ui.GOOD if remaining > 5 else ui.ACCENT).draw(surf)
         if self.phase != protocol.PHASE_FINAL:
-            self._wrapped(surf, self.gs.get("prompt", ""), _MARGIN, 110,
-                          self.app.width - _MARGIN * 2 - _SCORE_W, 24, ui.TEXT)
+            # Prompt starts at y=115; _draw_scoreboard renders a compact strip at y=90.
+            self._wrapped(surf, self.gs.get("prompt", ""), _MARGIN, 115,
+                          _content_w(self.app), 24, ui.TEXT)
 
     def _draw_scoreboard(self, surf: pygame.Surface) -> None:
-        x = self.app.width - _SCORE_W - _MARGIN + 20
-        ui.Label("SCORES", (x, 110), 18, ui.MUTED).draw(surf)
-        y = 140
-        for row in self.gs.get("scores", []):
-            ui.Label(row["name"][:14], (x, y), 18, ui.TEXT).draw(surf)
-            ui.Label(str(row["score"]), (x + _SCORE_W - 70, y), 18, ui.GOOD).draw(surf)
-            y += 28
+        if self.phase == protocol.PHASE_FINAL:
+            return
+        scores = self.gs.get("scores", [])
+        if not scores:
+            return
+        # Compact horizontal strip between round info and the prompt.
+        parts = [f"{r['name'][:8]}: {r['score']}" for r in scores]
+        ui.Label("  ·  ".join(parts), (_MARGIN, 90), 14, ui.MUTED).draw(surf)
 
     def _draw_prompt(self, surf: pygame.Surface) -> None:
         if self.role == "contestant":
             if self.gs.get("you_submitted"):
-                ui.Label("answer locked in:", (_MARGIN, 210), 18, ui.MUTED).draw(surf)
-                self._wrapped(surf, self.gs.get("your_answer", ""), _MARGIN, 240,
-                              self.app.width - _MARGIN * 2 - _SCORE_W, 22, ui.GOOD)
+                ui.Label("answer locked in:", (_MARGIN, 218), 18, ui.MUTED).draw(surf)
+                self._wrapped(surf, self.gs.get("your_answer", ""), _MARGIN, 244,
+                              _content_w(self.app), 22, ui.GOOD)
                 self._waiting(surf, "answers")
             else:
                 self.answer_input.draw(surf)
                 self.submit_btn.draw(surf)
         else:
             who = "you are the HOST — run the show" if self.role == "host" else "spectating"
-            ui.Label(who, (_MARGIN, 210), 18, ui.MUTED).draw(surf)
+            ui.Label(who, (_MARGIN, 218), 18, ui.MUTED).draw(surf)
             self._waiting(surf, "answers")
 
     def _draw_vote(self, surf: pygame.Surface) -> None:
         if self.role == "contestant" and not self.gs.get("you_submitted"):
             if self.vote_buttons:
-                ui.Label("vote for your favorite:", (_MARGIN, 165), 18, ui.MUTED).draw(surf)
+                ui.Label("vote for your favorite:", (_MARGIN, 218), 18, ui.MUTED).draw(surf)
                 for _aid, btn in self.vote_buttons:
                     btn.draw(surf)
             else:
-                ui.Label("no answers to vote on this round", (_MARGIN, 200), 18, ui.MUTED).draw(surf)
+                ui.Label("no answers to vote on this round", (_MARGIN, 218), 18, ui.MUTED).draw(surf)
         else:
             ui.Label("votes are in" if self.gs.get("you_submitted") else "voting...",
-                     (_MARGIN, 165), 18, ui.MUTED).draw(surf)
-            y = 200
+                     (_MARGIN, 218), 18, ui.MUTED).draw(surf)
+            y = 248
             for opt in self.gs.get("answers", []):
-                pygame.draw.rect(surf, ui.PANEL, pygame.Rect(_MARGIN, y, self.app.width - _MARGIN * 2 - _SCORE_W, 46), border_radius=8)
-                ui.Label(opt["text"][:60], (_MARGIN + 14, y + 14), 18, ui.TEXT).draw(surf)
+                pygame.draw.rect(surf, ui.PANEL, pygame.Rect(_MARGIN, y, _content_w(self.app), 46), border_radius=8)
+                ui.Label(opt["text"][:40], (_MARGIN + 14, y + 14), 18, ui.TEXT).draw(surf)
                 y += 54
             self._waiting(surf, "votes")
 
     def _draw_reveal(self, surf: pygame.Surface) -> None:
-        ui.Label("the results:", (_MARGIN, 165), 18, ui.MUTED).draw(surf)
+        ui.Label("the results:", (_MARGIN, 218), 18, ui.MUTED).draw(surf)
         results = self.gs.get("results", [])
         if not results:
-            ui.Label("nobody answered this round!", (_MARGIN, 210), 20, ui.ACCENT).draw(surf)
+            ui.Label("nobody answered this round!", (_MARGIN, 248), 20, ui.ACCENT).draw(surf)
             return
-        y = 200
-        width = self.app.width - _MARGIN * 2 - _SCORE_W
+        y = 248
+        width = _content_w(self.app)
         for r in results:
             pygame.draw.rect(surf, ui.PANEL, pygame.Rect(_MARGIN, y, width, 50), border_radius=8)
-            ui.Label(r["text"][:54], (_MARGIN + 14, y + 8), 18, ui.TEXT).draw(surf)
+            ui.Label(r["text"][:40], (_MARGIN + 14, y + 8), 18, ui.TEXT).draw(surf)
             vote_word = "vote" if r["votes"] == 1 else "votes"
             ui.Label(f'— {r["author_name"]}   (+{r["points"]}, {r["votes"]} {vote_word})',
                      (_MARGIN + 14, y + 30), 14, ui.MUTED).draw(surf)

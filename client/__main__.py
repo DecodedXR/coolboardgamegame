@@ -18,7 +18,9 @@ from client.scenes.base import Scene
 from client.scenes.connect import ConnectScene
 from config import DEFAULT_SERVER_URL, DEFAULT_CONNECT_HOST, DEFAULT_CONNECT_PORT
 
-WIDTH, HEIGHT = 820, 560
+# Portrait canvas — a phone held upright fills it without rotating, and the same
+# layout serves the desktop window (one layout to maintain, not a per-platform fork).
+WIDTH, HEIGHT = 480, 800
 FPS = 60
 
 

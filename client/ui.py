@@ -7,6 +7,8 @@ frame. Good enough for lobby UI without pulling in a GUI dependency.
 
 from __future__ import annotations
 
+import functools
+from pathlib import Path
 from typing import Callable, Optional
 
 import pygame
@@ -24,8 +26,15 @@ GOOD = (90, 200, 140)
 FIELD = (44, 46, 64)
 
 
+# A bundled monospace TTF, not a system font: browser/Emscripten system fonts are
+# unreliable and vary per device, so we ship one and render identically everywhere.
+_FONT_PATH = Path(__file__).parent / "assets" / "DejaVuSansMono.ttf"
+
+
+@functools.lru_cache(maxsize=64)
 def get_font(size: int) -> pygame.font.Font:
-    return pygame.font.SysFont("consolas,menlo,monospace", size)
+    # Cached: this is called for every Label/Button/TextInput every frame.
+    return pygame.font.Font(str(_FONT_PATH), size)
 
 
 class Label:
