@@ -26,6 +26,9 @@ prompts, judges, torments contestants) or the room can run **host-less / automat
   just: launch the client → type a name → enter the room code. (A sleeping
   free instance takes ~30–60s to wake on the first connect; the client shows a
   "waking the server…" status and retries.)
+- **Tier 4 — browser/WASM client ✅** The pygame client compiles to WebAssembly
+  via **pygbag** and is hosted on **GitHub Pages** — opening a link is enough to
+  play, no Python or install required.
 
 ```
 shared/protocol.py    wire format (message types + JSON encode/decode), shared by both sides
@@ -35,6 +38,20 @@ client/               pygame client (net thread + scenes: connect / menu / lobby
 config.py             HOST/PORT, room sizing, and Wrong-Answers tuning (rounds, timers, scoring)
 tests/                headless tests — test_server.py (end-to-end) + test_wrong_answers.py (rules)
 ```
+
+## Play in your browser
+
+Open **https://decodedxr.github.io/coolboardgamegame** in any modern browser — no
+Python, no install. The page connects to the cloud server; share a room code and
+play.
+
+- **Mobile** — hold your phone portrait (upright). The layout fills the screen and
+  text entry (name, room code, answers) uses the browser's native prompt dialog.
+- **Desktop** — the browser client works fine; the `python -m client` desktop build
+  is unchanged if you prefer it.
+
+> The very first connect of the day wakes Render's free tier (~30–60 s); the client
+> shows "waking the server…" and retries automatically.
 
 ### Playing Wrong Answers Only
 
