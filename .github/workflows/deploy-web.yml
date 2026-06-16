@@ -1,0 +1,51 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deployment at a time; new push cancels the queued one but lets a
+# running deployment finish so the site is never left in a half-published state.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pygbag
+        run: pip install "pygbag==0.9.3"
+
+      - name: Build WASM bundle
+        # pygbag reads pygbag.ini (ignoreDirs/ignoreFiles) from the same directory
+        # as main.py, so this excludes server/, tests/, spike/ automatically.
+        run: python -m pygbag --build main.py
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          # pygbag outputs to build/web/ relative to the entry file (repo root).
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
