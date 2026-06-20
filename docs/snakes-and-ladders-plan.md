@@ -8,7 +8,7 @@
 > box.
 
 ## Progress tracker
-- [ ] **Chunk 1 — Game engine (pure logic) + tests** (additive; biggest)
+- [x] **Chunk 1 — Game engine (pure logic) + tests** (additive; biggest) — DONE: `server/games/snakes_and_ladders.py` + `tests/test_snakes_and_ladders.py` (45 tests), `SAL_*`/protocol constants added. Suite 105 green.
 - [ ] **Chunk 2 — Server turn-driver + integration tests; retire quiplash server-side**
 - [ ] **Chunk 3 — Client foundation: board render + audio + animation timeline**
 - [ ] **Chunk 4 — Client components: wheel + shop UI + cutscene**

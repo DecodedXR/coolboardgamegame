@@ -27,7 +27,7 @@ C_JOIN_ROOM = "join_room"            # {code, name}
 C_SET_READY = "set_ready"            # {ready}
 C_SET_HOST_MODE = "set_host_mode"    # {mode}            (host only)
 C_TRANSFER_HOST = "transfer_host"    # {target_id}       (host only)
-C_START_GAME = "start_game"          # {}                (host / human-host or any player in auto)
+C_START_GAME = "start_game"          # {bots?:int}       (host / human-host or any player in auto)
 C_LEAVE_ROOM = "leave_room"          # {}
 C_PING = "ping"                      # {}
 
@@ -37,6 +37,15 @@ C_SUBMIT_ANSWER = "submit_answer"    # {text}            (contestants, prompt ph
 C_SUBMIT_VOTE = "submit_vote"        # {answer_id}       (contestants, vote phase)
 C_ADVANCE_PHASE = "advance_phase"    # {}                (show-runner: human host / auto owner)
 C_RETURN_TO_LOBBY = "return_to_lobby"  # {}              (show-runner) end game, back to lobby
+
+# --- In-game: Snakes & Ladders (client -> server) -------------------------
+# A turn-based board game: the current player rolls; landing on special tiles
+# spins wheels, grants gold, applies debuffs, or opens a shop sub-state.
+
+C_ROLL_DICE = "roll_dice"            # {}                (current player, awaiting "roll")
+C_USE_POWERUP = "use_powerup"        # {item}            (current player, pre-roll; does not pass turn)
+C_BUY_ITEM = "buy_item"              # {item}            (current player, awaiting "shop"; passes turn)
+C_SKIP_SHOP = "skip_shop"            # {}                (current player, awaiting "shop"; passes turn)
 
 
 # --- Server -> Client message types ---------------------------------------
@@ -54,12 +63,18 @@ S_PONG = "pong"                      # {}
 # --- Game identifiers -----------------------------------------------------
 
 GAME_WRONG_ANSWERS = "wrong_answers"
+GAME_SNAKES_AND_LADDERS = "snakes_and_ladders"
 
-# Game phases (value of game["phase"] in an S_GAME_STATE payload).
+# Wrong Answers Only phases (value of game["phase"] in an S_GAME_STATE payload).
 PHASE_PROMPT = "prompt"   # contestants type an answer
 PHASE_VOTE = "vote"       # contestants vote on the (anonymized) answers
 PHASE_REVEAL = "reveal"   # authorship + votes + round scores revealed
 PHASE_FINAL = "final"     # final scoreboard
+
+# Snakes & Ladders phases. Only two: the shop is an ``awaiting`` sub-state of
+# PHASE_PLAY (not a phase), which avoids "player changed but phase didn't" races.
+PHASE_PLAY = "play"           # the turn loop (game["awaiting"] is "roll" or "shop")
+PHASE_GAMEOVER = "gameover"   # someone reached the final cell; winner is set
 
 
 # --- Error codes ----------------------------------------------------------
@@ -79,6 +94,10 @@ ERR_WRONG_PHASE = "wrong_phase"
 ERR_NOT_CONTESTANT = "not_contestant"
 ERR_BAD_ANSWER = "bad_answer"
 ERR_BAD_VOTE = "bad_vote"
+# Snakes & Ladders turn errors.
+ERR_NOT_YOUR_TURN = "not_your_turn"      # acted when it isn't your turn
+ERR_WRONG_SUBSTATE = "wrong_substate"    # rolled while shopping, or shopped while rolling
+ERR_BAD_ITEM = "bad_item"                # unknown / unaffordable / not-held item
 
 
 def encode(msg_type: str, **payload: Any) -> str:
