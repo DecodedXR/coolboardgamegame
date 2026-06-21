@@ -11,7 +11,13 @@
 - [x] **Chunk 1 — Game engine (pure logic) + tests** (additive; biggest) — DONE: `server/games/snakes_and_ladders.py` + `tests/test_snakes_and_ladders.py` (45 tests), `SAL_*`/protocol constants added. Suite 105 green.
 - [x] **Chunk 2 — Server turn-driver + integration tests; retire quiplash server-side** — DONE: rewrote `server/connection.py` game-driving section per A5 (single `_drive` funnel + `_auto_turn`/`_turn_deadline` carrying a `(pid, seq)` single-resolution guard, four `C_*` handlers, generalized `_reject_turn`, `_clamp_bots`, `_make_rng` seam; `_on_roster_change` auto-plays an absent current actor without resetting a present one's deadline). Deleted `server/games/wrong_answers.py` + `prompts.py` + `tests/test_wrong_answers.py`; rewrote the WAO in-game section of `tests/test_server.py` into S&L driver tests. Suite 109 green. WAO protocol/config constants + client scene kept until Chunk 5.
 - [x] **Chunk 3 — Client foundation: board render + audio + animation timeline** — DONE: `client/board_render.py` (serpentine `cell_to_xy`/`BoardLayout` + grid/snake/ladder/glyph/token/legend drawing), `client/sfx.py` (procedural-WAV synth, lazy/guarded mixer that degrades to silent + retries after autoplay-block), `client/token_anim.py` (`seq`-gated turn-timeline player in cell space). Headless tests `tests/test_{board_render,sfx,token_anim}.py` (+32). Suite 141 green.
-- [ ] **Chunk 4 — Client components: wheel + shop UI + cutscene**
+- [x] **Chunk 4 — Client components: wheel + shop UI + cutscene** — DONE: `client/wheel.py`
+  (pure spin geometry `spin_angle`/`slice_at_pointer` round-tripping render-angle↔server
+  `index`, the client never picks the slice; `slice_label`; `Wheel` widget), `client/shop_ui.py`
+  (`ShopLayout`/`resolve_click` with affordability-gated `on_buy`, `on_skip`; `item_label`/blurb
+  mirroring the powerup catalog), `client/cutscene.py` (`turn_text`/`event_text` win>skip banner
+  derivation; `Cutscene` fade-envelope + persistent win banner). Headless tests
+  `tests/test_{wheel,shop_ui,cutscene}.py` (+30). Suite 171 green; modules import cleanly.
 - [ ] **Chunk 5 — Scene + go-live: wire, route lobby, retire quiplash client-side, docs**
 
 ---
