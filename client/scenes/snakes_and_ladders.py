@@ -382,7 +382,9 @@ class SnakesAndLaddersScene(Scene):
         ui.Label(sub, (_MARGIN, 60), 18, ui.MUTED).draw(surf)
         remaining = countdown_seconds(gs.get("deadline"), time.time())
         if remaining is not None:
-            ui.Label(f"{remaining}s", (self.app.width - _MARGIN - 4, 24), 28,
+            txt = f"{remaining}s"
+            tw = ui.get_font(28).size(txt)[0]  # right-align so multi-digit values don't clip the edge
+            ui.Label(txt, (self.app.width - _MARGIN - tw, 24), 28,
                      ui.GOOD if remaining > 5 else ui.ACCENT).draw(surf)
         me = my_player(gs)
         if me:
