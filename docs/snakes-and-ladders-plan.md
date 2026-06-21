@@ -9,7 +9,7 @@
 
 ## Progress tracker
 - [x] **Chunk 1 — Game engine (pure logic) + tests** (additive; biggest) — DONE: `server/games/snakes_and_ladders.py` + `tests/test_snakes_and_ladders.py` (45 tests), `SAL_*`/protocol constants added. Suite 105 green.
-- [ ] **Chunk 2 — Server turn-driver + integration tests; retire quiplash server-side**
+- [x] **Chunk 2 — Server turn-driver + integration tests; retire quiplash server-side** — DONE: rewrote `server/connection.py` game-driving section per A5 (single `_drive` funnel + `_auto_turn`/`_turn_deadline` carrying a `(pid, seq)` single-resolution guard, four `C_*` handlers, generalized `_reject_turn`, `_clamp_bots`, `_make_rng` seam; `_on_roster_change` auto-plays an absent current actor without resetting a present one's deadline). Deleted `server/games/wrong_answers.py` + `prompts.py` + `tests/test_wrong_answers.py`; rewrote the WAO in-game section of `tests/test_server.py` into S&L driver tests. Suite 109 green. WAO protocol/config constants + client scene kept until Chunk 5.
 - [ ] **Chunk 3 — Client foundation: board render + audio + animation timeline**
 - [ ] **Chunk 4 — Client components: wheel + shop UI + cutscene**
 - [ ] **Chunk 5 — Scene + go-live: wire, route lobby, retire quiplash client-side, docs**

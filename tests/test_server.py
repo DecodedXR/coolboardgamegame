@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import http.client
+import random
 from typing import Any, Optional
 
 import pytest
@@ -18,6 +19,7 @@ import websockets
 import server.connection as connection
 from server.__main__ import health_check
 from server.connection import GameServer
+from server.games.snakes_and_ladders import AWAIT_ROLL, AWAIT_SHOP
 from shared import protocol
 
 _CLOSE = object()
@@ -276,7 +278,7 @@ async def test_health_check_responds_and_still_upgrades():
             assert await ws.recv() == "hi"
 
 
-# --- Wrong Answers Only (in-game) -----------------------------------------
+# --- Snakes & Ladders turn driver (in-game) -------------------------------
 
 
 async def _host_auto_room(server, conns, names):
@@ -299,96 +301,365 @@ async def test_start_game_needs_two_contestants():
     await a.drop(); await ta
 
 
-async def test_auto_game_full_flow(monkeypatch):
-    monkeypatch.setattr(connection, "WAO_TOTAL_ROUNDS", 1)
+async def _wait(cond, *, tries: int = 80) -> None:
+    """Spin the loop with small real sleeps until ``cond()`` holds, giving a
+    bot/timer chain scheduled with a tiny delay time to actually run."""
+    for _ in range(tries):
+        if cond():
+            return
+        await asyncio.sleep(0.005)
+        await settle()
+    assert cond(), "condition still false after waiting"
+
+
+def _conn_for(conns, pid):
+    """The FakeConn whose player id is ``pid`` (matched via its game view)."""
+    for c in conns:
+        g = c.last(protocol.S_GAME_STATE)
+        if g is not None and g["game"]["your_id"] == pid:
+            return c
+    raise AssertionError(f"no connected conn owns pid {pid!r}")
+
+
+async def test_one_human_plus_bot_starts():
+    server = GameServer()
+    a, ta = await open_conn(server)
+    await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
+    await a.push(protocol.C_START_GAME, bots=1)  # 1 human + 1 bot = 2 players
+
+    assert protocol.S_GAME_STARTED in a.types()
+    g = a.game()
+    assert g["phase"] == protocol.PHASE_PLAY
+    assert g["awaiting"] == AWAIT_ROLL
+    assert len(g["players"]) == 2
+    assert sum(1 for p in g["players"] if p["is_bot"]) == 1
+    assert g["your_turn"] is True  # the human acts first (order = humans then bots)
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)  # cancel the pending turn timer
+    await a.drop(); await ta
+
+
+async def test_bad_bots_value_is_ignored():
+    server = GameServer()
+    a, ta = await open_conn(server)
+    await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
+    await a.push(protocol.C_START_GAME, bots="lots")  # garbage -> treated as 0 bots
+    assert a.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_ENOUGH_PLAYERS
+    assert protocol.S_GAME_STARTED not in a.types()
+    await a.drop(); await ta
+
+
+async def test_bot_count_clamped_to_room_cap():
+    server = GameServer()
+    a, ta = await open_conn(server)
+    await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
+    code = a.last(protocol.S_ROOM_CREATED)["code"]
+    await a.push(protocol.C_START_GAME, bots=99)  # absurd -> clamped to fill the room
+
+    game = server.games[code]
+    assert len(game.bot_ids) == connection.MAX_PLAYERS_PER_ROOM - 1  # one human seat
+    assert len(game.order) == connection.MAX_PLAYERS_PER_ROOM
+    await a.push(protocol.C_RETURN_TO_LOBBY)
+    await a.drop(); await ta
+
+
+async def test_bots_are_not_room_players():
+    server = GameServer()
+    a, ta = await open_conn(server)
+    await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
+    code = a.last(protocol.S_ROOM_CREATED)["code"]
+    await a.push(protocol.C_START_GAME, bots=3)
+
+    game = server.games[code]
+    room = server.rooms.get(code)
+    # Bots live only in the game object -> never a room player -> no broadcast ever
+    # tries to send to them (they have no connection).
+    assert len(game.bot_ids) == 3
+    assert all(bid not in room.players for bid in game.bot_ids)
+    assert set(room.players) == {a.game()["your_id"]}
+    assert sum(1 for p in a.game()["players"] if p["is_bot"]) == 3
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)
+    await a.drop(); await ta
+
+
+async def test_roll_alternates_turn_and_rejects_off_turn():
     server = GameServer()
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
-    c, tc = await open_conn(server)
-    await _host_auto_room(server, [a, b, c], ["A", "B", "C"])
+    await _host_auto_room(server, [a, b], ["A", "B"])
+    await a.push(protocol.C_START_GAME)  # 2 contestants, no bots
 
-    await a.push(protocol.C_START_GAME)
-    assert protocol.S_GAME_STARTED in a.types() and protocol.S_GAME_STARTED in c.types()
-    gs = a.game()
-    assert gs["phase"] == protocol.PHASE_PROMPT
-    assert gs["contestant_count"] == 3
-    assert gs["you_role"] == "contestant"
+    cur = a.game()["current_pid"]
+    cur_conn = _conn_for([a, b], cur)
+    off_conn = b if cur_conn is a else a
 
-    # Everyone answers -> auto-advances to the vote phase.
-    await a.push(protocol.C_SUBMIT_ANSWER, text="answer A")
-    await b.push(protocol.C_SUBMIT_ANSWER, text="answer B")
-    await c.push(protocol.C_SUBMIT_ANSWER, text="answer C")
-    assert a.game()["phase"] == protocol.PHASE_VOTE
+    # The off-turn player cannot roll.
+    await off_conn.push(protocol.C_ROLL_DICE)
+    assert off_conn.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_YOUR_TURN
+    # Buying while it's a roll turn is the wrong sub-state.
+    await cur_conn.push(protocol.C_BUY_ITEM, item="boost")
+    assert cur_conn.last(protocol.S_ERROR)["code"] == protocol.ERR_WRONG_SUBSTATE
 
-    # B and C both vote for A's answer; A votes for B's.
-    def aid_for(voter_conn, author_text):
-        return next(o["answer_id"] for o in voter_conn.game()["answers"] if o["text"] == author_text)
+    assert a.game()["last_turn"] is None  # nobody has rolled yet
+    # The current player rolls; the turn resolves and (after any shop) passes on.
+    await cur_conn.push(protocol.C_ROLL_DICE)
+    g = a.game()
+    assert g["last_turn"]["seq"] == 1
+    if g["awaiting"] == AWAIT_SHOP:
+        await cur_conn.push(protocol.C_SKIP_SHOP)
+        g = a.game()
+    assert g["current_pid"] != cur  # the turn passed to the other player
 
-    await b.push(protocol.C_SUBMIT_VOTE, answer_id=aid_for(b, "answer A"))
-    await c.push(protocol.C_SUBMIT_VOTE, answer_id=aid_for(c, "answer A"))
-    await a.push(protocol.C_SUBMIT_VOTE, answer_id=aid_for(a, "answer B"))
-
-    # All votes in -> reveal with scores.
-    gs = a.game()
-    assert gs["phase"] == protocol.PHASE_REVEAL
-    scores = {row["name"]: row["score"] for row in gs["scores"]}
-    assert scores == {"A": 200, "B": 100, "C": 0}
-
-    # Owner advances the (single) round -> final.
-    await a.push(protocol.C_ADVANCE_PHASE)
-    assert a.game()["phase"] == protocol.PHASE_FINAL
-    assert a.game()["scores"][0]["name"] == "A"
-
-    await a.drop(); await b.drop(); await c.drop()
-    await asyncio.gather(ta, tb, tc)
+    await a.push(protocol.C_RETURN_TO_LOBBY)
+    await a.drop(); await b.drop()
+    await asyncio.gather(ta, tb)
 
 
-async def test_human_host_drives_phases_manually(monkeypatch):
-    monkeypatch.setattr(connection, "WAO_TOTAL_ROUNDS", 1)
+async def test_shop_buy_over_the_wire():
     server = GameServer()
-    a, ta = await open_conn(server)  # host + owner
+    a, ta = await open_conn(server)
+    b, tb = await open_conn(server)
+    code = await _host_auto_room(server, [a, b], ["A", "B"])
+    await a.push(protocol.C_START_GAME)
+
+    cur = a.game()["current_pid"]
+    cur_conn = _conn_for([a, b], cur)
+    # Put the current actor into the shop sub-state directly (landing on a shop tile
+    # is the engine's job, tested elsewhere); here we verify the C_BUY_ITEM wire path.
+    game = server.games[code]
+    game.awaiting = AWAIT_SHOP
+    game.gold[cur] = 500
+    await server._broadcast_game(server.rooms.get(code), game)
+    assert cur_conn.game()["awaiting"] == AWAIT_SHOP
+    assert "shop" in cur_conn.game()  # stock is secret to the current player
+
+    await cur_conn.push(protocol.C_BUY_ITEM, item="boost")
+    g = cur_conn.game()
+    me = next(p for p in g["players"] if p["id"] == cur)
+    assert me["gold"] < 500 and "boost" in me["items"]  # gold spent, item held
+    assert g["current_pid"] != cur and g["awaiting"] == AWAIT_ROLL  # buying passed the turn
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)
+    await a.drop(); await b.drop()
+    await asyncio.gather(ta, tb)
+
+
+async def test_bot_takes_its_turn_in_auto(monkeypatch):
+    monkeypatch.setattr(connection, "SAL_BOT_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr(connection, "SAL_ROLL_SECONDS", 999)  # the human won't auto-roll
+    server = GameServer()
+    a, ta = await open_conn(server)
+    await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
+    await a.push(protocol.C_START_GAME, bots=1)
+
+    human = a.game()["your_id"]
+    assert a.game()["current_pid"] == human  # human first
+    await a.push(protocol.C_ROLL_DICE)
+    if a.game()["awaiting"] == AWAIT_SHOP:
+        await a.push(protocol.C_SKIP_SHOP)
+    assert a.game()["current_pid"] != human  # it's the bot's turn now
+
+    # The driver auto-plays the bot; the turn comes back to the human.
+    await _wait(lambda: a.game()["current_pid"] == human)
+    assert a.game()["last_turn"]["seq"] >= 2  # human roll + at least one bot turn
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)
+    await a.drop(); await ta
+
+
+async def test_bot_plays_in_human_host_mode(monkeypatch):
+    monkeypatch.setattr(connection, "SAL_BOT_DELAY_SECONDS", 0.01)
+    server = GameServer()
+    a, ta = await open_conn(server)  # the human host (runs the show, not a player)
+    await a.push(protocol.C_CREATE_ROOM, name="Host", host_mode=protocol.HOST_HUMAN)
+    await a.push(protocol.C_START_GAME, bots=2)  # 0 human contestants + 2 bots
+
+    g = a.game()
+    assert g["you_role"] == "host"
+    assert len(g["players"]) == 2 and all(p["is_bot"] for p in g["players"])
+    assert g["your_turn"] is False
+    # Bots play themselves in human-host mode too (no host action needed).
+    await _wait(lambda: a.game()["last_turn"] is not None)
+    assert a.game()["last_turn"]["seq"] >= 1
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)  # stop the bot chain
+    await a.drop(); await ta
+
+
+async def test_auto_deadline_auto_rolls(monkeypatch):
+    monkeypatch.setattr(connection, "SAL_ROLL_SECONDS", 0.02)
+    server = GameServer()
+    a, ta = await open_conn(server)
+    b, tb = await open_conn(server)
+    await _host_auto_room(server, [a, b], ["A", "B"])
+    await a.push(protocol.C_START_GAME)
+
+    assert a.game()["last_turn"] is None
+    # Nobody rolls; after the (tiny) deadline the driver auto-rolls the current actor.
+    await _wait(lambda: a.game()["last_turn"] is not None)
+    assert a.game()["last_turn"]["seq"] >= 1
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)  # stop the auto-roll chain
+    await a.drop(); await b.drop()
+    await asyncio.gather(ta, tb)
+
+
+async def test_human_host_force_advance_and_non_host_rejected():
+    server = GameServer()
+    a, ta = await open_conn(server)  # host
     b, tb = await open_conn(server)
     c, tc = await open_conn(server)
     await a.push(protocol.C_CREATE_ROOM, name="Host", host_mode=protocol.HOST_HUMAN)
     code = a.last(protocol.S_ROOM_CREATED)["code"]
     await b.push(protocol.C_JOIN_ROOM, code=code, name="B")
     await c.push(protocol.C_JOIN_ROOM, code=code, name="C")
+    await a.push(protocol.C_START_GAME)  # contestants B & C; host A runs the show
 
-    await a.push(protocol.C_START_GAME)
-    assert a.game()["you_role"] == "host"
-    assert a.game()["contestant_count"] == 2  # host is not a contestant
-    assert b.game()["you_role"] == "contestant"
+    g = a.game()
+    assert g["you_role"] == "host" and len(g["players"]) == 2
+    assert g["deadline"] is None  # human-host parks (no auto deadline)
+    cur = g["current_pid"]
 
-    # Both contestants answer; with a human host this does NOT auto-advance.
-    await b.push(protocol.C_SUBMIT_ANSWER, text="bee")
-    await c.push(protocol.C_SUBMIT_ANSWER, text="cee")
-    assert a.game()["phase"] == protocol.PHASE_PROMPT
-
-    # The host can't submit answers (not a contestant).
-    await a.push(protocol.C_SUBMIT_ANSWER, text="nope")
-    assert a.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_CONTESTANT
-
-    # Host advances to voting.
-    await a.push(protocol.C_ADVANCE_PHASE)
-    assert b.game()["phase"] == protocol.PHASE_VOTE
-
-    # A non-host cannot advance.
+    # A non-host cannot force-advance.
     await b.push(protocol.C_ADVANCE_PHASE)
     assert b.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_HOST
+    assert a.game()["last_turn"] is None
 
-    # Contestants vote for each other, host advances to reveal.
-    aid_b = next(o["answer_id"] for o in b.game()["answers"])  # the other answer (cee)
-    aid_c = next(o["answer_id"] for o in c.game()["answers"])  # the other answer (bee)
-    await b.push(protocol.C_SUBMIT_VOTE, answer_id=aid_b)
-    await c.push(protocol.C_SUBMIT_VOTE, answer_id=aid_c)
-    assert b.game()["phase"] == protocol.PHASE_VOTE  # still manual
+    # The host clicks NEXT -> the current actor's turn is force-resolved.
     await a.push(protocol.C_ADVANCE_PHASE)
-    assert a.game()["phase"] == protocol.PHASE_REVEAL
-    scores = {row["name"]: row["score"] for row in a.game()["scores"]}
-    assert scores == {"B": 100, "C": 100}
+    g = a.game()
+    assert g["last_turn"]["seq"] == 1
+    if g["awaiting"] == AWAIT_SHOP:
+        await a.push(protocol.C_ADVANCE_PHASE)  # NEXT again leaves the shop
+        g = a.game()
+    assert g["current_pid"] != cur
 
     await a.drop(); await b.drop(); await c.drop()
     await asyncio.gather(ta, tb, tc)
+
+
+async def test_disconnect_during_turn_unsticks(monkeypatch):
+    monkeypatch.setattr(connection, "SAL_BOT_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr(connection, "DISCONNECT_GRACE_SECONDS", 0.05)
+    server = GameServer()
+    a, ta = await open_conn(server)
+    b, tb = await open_conn(server)
+    await _host_auto_room(server, [a, b], ["A", "B"])
+    await a.push(protocol.C_START_GAME)
+
+    cur = a.game()["current_pid"]
+    cur_conn = _conn_for([a, b], cur)
+    other = b if cur_conn is a else a
+
+    # The current player vanishes mid-turn. The driver treats an absent human like a
+    # bot and auto-plays their turn so the game can't deadlock.
+    await cur_conn.drop()
+    await _wait(lambda: other.game()["last_turn"] is not None
+                and other.game()["last_turn"]["seq"] >= 1)
+    assert other.game()["last_turn"]["seq"] >= 1
+
+    await other.push(protocol.C_RETURN_TO_LOBBY)
+    await other.drop()
+    await asyncio.gather(ta, tb)
+
+
+async def test_make_rng_seam_determinizes_board(monkeypatch):
+    boards = []
+    for _ in range(2):
+        server = GameServer()
+        monkeypatch.setattr(server, "_make_rng", lambda: random.Random(12345))
+        a, ta = await open_conn(server)
+        await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_AUTO)
+        await a.push(protocol.C_START_GAME, bots=1)
+        boards.append(a.game()["board"])
+        await a.push(protocol.C_RETURN_TO_LOBBY)
+        await a.drop(); await ta
+    assert boards[0] == boards[1]  # same seed -> identical freshly-randomized board
+
+
+async def test_use_powerup_over_the_wire():
+    server = GameServer()
+    a, ta = await open_conn(server)
+    b, tb = await open_conn(server)
+    code = await _host_auto_room(server, [a, b], ["A", "B"])
+    await a.push(protocol.C_START_GAME)
+
+    cur = a.game()["current_pid"]
+    cur_conn = _conn_for([a, b], cur)
+    game = server.games[code]
+    game.items[cur] = ["boost"]  # grant a held powerup (landing-driven in real play)
+    await server._broadcast_game(server.rooms.get(code), game)
+
+    # Using a held powerup is consumed and ARMED, without passing the turn.
+    await cur_conn.push(protocol.C_USE_POWERUP, item="boost")
+    g = cur_conn.game()
+    me = next(p for p in g["players"] if p["id"] == cur)
+    assert "boost" not in me["items"]            # consumed
+    assert g["current_pid"] == cur               # the turn did NOT pass
+    assert "boost" in g.get("your_armed", [])    # armed for the upcoming roll
+    # Using a powerup you don't hold is rejected as a bad item.
+    await cur_conn.push(protocol.C_USE_POWERUP, item="double")
+    assert cur_conn.last(protocol.S_ERROR)["code"] == protocol.ERR_BAD_ITEM
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)
+    await a.drop(); await b.drop()
+    await asyncio.gather(ta, tb)
+
+
+async def test_roster_change_does_not_reset_current_deadline(monkeypatch):
+    monkeypatch.setattr(connection, "DISCONNECT_GRACE_SECONDS", 0.05)
+    server = GameServer()
+    a, ta = await open_conn(server)
+    b, tb = await open_conn(server)
+    c, tc = await open_conn(server)
+    code = await _host_auto_room(server, [a, b, c], ["A", "B", "C"])
+    await a.push(protocol.C_START_GAME)
+
+    game = server.games[code]
+    cur = game.current_pid
+    deadline_before = game.deadline
+    assert deadline_before is not None
+    # A NON-current player (a non-owner B/C) disconnects. The unrelated roster change
+    # must NOT reset the current actor's already-ticking auto-roll deadline.
+    dropper = next(x for x in (b, c) if x.game()["your_id"] != cur)
+    await dropper.drop()
+    await settle()
+    assert game.deadline == deadline_before
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)
+    await a.drop(); await b.drop(); await c.drop()
+    await asyncio.gather(ta, tb, tc)
+
+
+async def test_superseded_turn_timer_resolves_nothing(monkeypatch):
+    monkeypatch.setattr(connection, "SAL_BOT_DELAY_SECONDS", 0)
+    server = GameServer()
+    a, ta = await open_conn(server)
+    b, tb = await open_conn(server)
+    code = await _host_auto_room(server, [a, b], ["A", "B"])
+    await a.push(protocol.C_START_GAME)
+
+    game = server.games[code]
+    stale_pid, stale_seq = game.current_pid, game.seq  # the turn a timer was armed for
+    # Resolve that turn for real, so any timer armed for (stale_pid, stale_seq) is now
+    # superseded.
+    cur_conn = _conn_for([a, b], stale_pid)
+    await cur_conn.push(protocol.C_ROLL_DICE)
+    if game.awaiting == AWAIT_SHOP:
+        await cur_conn.push(protocol.C_SKIP_SHOP)
+    seq_after = game.seq
+    assert seq_after > stale_seq
+
+    # A stale deadline / auto-turn for the old turn must be a no-op (the local
+    # (pid, seq) guard) — never a second resolution.
+    await server._turn_deadline(code, 0, stale_pid, stale_seq)
+    await server._auto_turn(code, stale_pid, stale_seq)
+    assert game.seq == seq_after  # no extra turn resolved
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)
+    await a.drop(); await b.drop()
+    await asyncio.gather(ta, tb)
 
 
 async def test_return_to_lobby_ends_game():

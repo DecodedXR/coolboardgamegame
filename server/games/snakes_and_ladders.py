@@ -1,9 +1,8 @@
 """Snakes & Ladders — a snake-heavy, server-authoritative board game.
 
-Like :class:`server.games.wrong_answers.WrongAnswersGame`, this is pure game
-state: no asyncio, no sockets. The connection layer drives it (records the
-current player's action, runs auto/bot timers) and serializes a per-player view
-with :meth:`public`.
+This class is pure game state: no asyncio, no sockets. The connection layer
+drives it (records the current player's action, runs auto/bot timers) and
+serializes a per-player view with :meth:`public`.
 
 **The core trick that makes a networked, *animated* board game testable:** the
 server computes each turn's *entire* resolution up front as an ordered,
