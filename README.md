@@ -14,12 +14,17 @@ prompts, judges, torments contestants) or the room can run **host-less / automat
 - **Milestone 1 — networking plumbing ✅** The multiplayer spine: lobby, rooms,
   live state broadcast, ready-up, the human/auto **host toggle**, **host handoff**,
   and graceful disconnect with a grace period.
-- **Milestone 2 — first minigame: Wrong Answers Only ✅** A Quiplash-style round
-  loop plugged in behind `start_game`: **prompt → answers → vote → score**, across
-  several rounds, ending on a scoreboard. Answers are anonymized for voting (you
-  can't see who wrote what, and can't vote for your own). Driven either by a
-  **human host** (manual *reveal / next* control) or the **auto host** (per-phase
-  countdown timers that also fast-forward once everyone has acted).
+- **Milestone 2 — networked Snakes & Ladders ✅** A turn-based, server-authoritative
+  board game plugged in behind `start_game` — and **snake-heavy**, so winning is
+  brutal. Roll the dice to move; landing on a special tile spins a Wheel-of-Names
+  for a powerup / debuff / gold outcome, opens a shop, grants gold, or drops a
+  debuff on you. A gold economy and held powerups (immunity / boost / double /
+  reroll) ride on top. The board is freshly randomized each game. Server-side
+  **bot players** fill empty seats so you can play solo against the computer.
+  Driven either by a **human host** (manual *next* control) or the **auto host**
+  (per-turn countdown timers). The server resolves each turn into an ordered
+  timeline that clients replay as animation (token hops, snake slides, wheel
+  spins, cutscenes, procedural SFX).
 - **Milestone 3 — true online (cloud-hosted) ✅** The server is deployed on
   **Render** (free tier) at `wss://coolboardgamegame.onrender.com` and is the
   client's baked-in default — nobody runs a server or a tunnel. Joining is now
@@ -33,10 +38,11 @@ prompts, judges, torments contestants) or the room can run **host-less / automat
 ```
 shared/protocol.py    wire format (message types + JSON encode/decode), shared by both sides
 server/               authoritative websockets server (rooms, host logic, broadcasting)
-server/games/         pluggable minigames — wrong_answers.py (pure rules) + prompts.py
-client/               pygame client (net thread + scenes: connect / menu / lobby / wrong_answers)
-config.py             HOST/PORT, room sizing, and Wrong-Answers tuning (rounds, timers, scoring)
-tests/                headless tests — test_server.py (end-to-end) + test_wrong_answers.py (rules)
+server/games/         pluggable minigames — snakes_and_ladders.py (pure rules + turn timeline)
+client/               pygame client (net thread + scenes: connect / menu / lobby / snakes_and_ladders)
+client/board_render.py, token_anim.py, wheel.py, shop_ui.py, cutscene.py, sfx.py  — board components
+config.py             HOST/PORT, room sizing, and Snakes & Ladders tuning (board, tiles, economy, timers)
+tests/                headless tests — test_server.py (end-to-end) + test_snakes_and_ladders.py (rules)
 ```
 
 ## Play in your browser
@@ -53,16 +59,20 @@ play.
 > The very first connect of the day wakes Render's free tier (~30–60 s); the client
 > shows "waking the server…" and retries automatically.
 
-### Playing Wrong Answers Only
+### Playing Snakes & Ladders
 
 One player starts the game from the lobby (the **host** in human mode, the
-**owner** in auto mode); you need at least two *contestants* (the human host
-doesn't play, just runs the show). Each round shows a prompt; contestants type the
-funniest wrong answer, then vote on the anonymized answers. Each vote your answer
-gets is worth points. In **human** mode the host clicks through *reveal answers →
-show results → next round*; in **auto** mode timers do it (and skip ahead the
-moment everyone's answered or voted). After the last round, the host returns
-everyone to the lobby to play again.
+**owner** in auto mode), optionally seating a few **bots** with the `- bots N +`
+stepper to fill out the board — you need at least two players total (humans + bots).
+On your turn, click **ROLL** to move along the serpentine board. Land on a snake
+and you slide *down* (there are far more snakes than ladders — winning is meant to
+hurt); land on a special tile to spin a wheel for a random outcome, gain gold, take
+a debuff, or open a **shop** to buy a powerup. Powerups you hold (immunity / boost /
+double / reroll) can be armed *before* you roll. Reach the final cell exactly to win
+(overshooting bounces back). In **auto** mode a per-turn timer keeps things moving
+and bots take their own turns; in **human** mode the host can force the current turn
+along with **NEXT**. When someone wins, the host returns everyone to the lobby to
+play again.
 
 ## Setup
 
@@ -97,9 +107,9 @@ python -m pip install -r requirements.txt
    a room **code**. Everyone else types that code and clicks **JOIN**.
 
 5. In the lobby: toggle **READY**; the **owner** can flip host mode; in HUMAN mode the
-   host clicks a player to **pass the host role**; the host (HUMAN) or owner (AUTO)
-   clicks **START GAME** to launch Wrong Answers Only (see *Playing Wrong Answers
-   Only* above).
+   host clicks a player to **pass the host role**; the starter can seat **bots** with
+   the `- bots N +` stepper; the host (HUMAN) or owner (AUTO) clicks **START GAME** to
+   launch Snakes & Ladders (see *Playing Snakes & Ladders* above).
 
 ## Cloud (live)
 
@@ -120,7 +130,10 @@ python -m pytest
 
 `test_server.py` drives the server through fake connections to assert the full
 broadcast behavior (create/join, ready, host toggle, host handoff, grace-period
-disconnect) plus the Wrong Answers Only flow end to end (auto + human host,
-anonymized voting, scoring, return-to-lobby). `test_wrong_answers.py` covers the
-pure game rules directly. Everything runs without pygame or real sockets, in well
-under a second.
+disconnect) plus the Snakes & Ladders turn driver end to end (auto + human host,
+bots taking turns, deadlines, disconnect-during-turn, shop buys, return-to-lobby).
+`test_snakes_and_ladders.py` covers the pure game rules directly (board gen, the
+turn timeline, bounce, transports, the economy), and the `test_board_render` /
+`test_token_anim` / `test_wheel` / `test_shop_ui` / `test_cutscene` /
+`test_snakes_scene` suites pin the client components and scene wiring. Everything
+runs without a display or real sockets, in a few seconds.

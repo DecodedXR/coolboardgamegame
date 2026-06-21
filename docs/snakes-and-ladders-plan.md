@@ -18,7 +18,19 @@
   mirroring the powerup catalog), `client/cutscene.py` (`turn_text`/`event_text` win>skip banner
   derivation; `Cutscene` fade-envelope + persistent win banner). Headless tests
   `tests/test_{wheel,shop_ui,cutscene}.py` (+30). Suite 171 green; modules import cleanly.
-- [ ] **Chunk 5 — Scene + go-live: wire, route lobby, retire quiplash client-side, docs**
+- [x] **Chunk 5 — Scene + go-live: wire, route lobby, retire quiplash client-side, docs** —
+  DONE: `client/scenes/snakes_and_ladders.py` (orchestrator `Scene` composing
+  board_render/token_anim/wheel/shop_ui/cutscene/sfx; pure helpers `is_runner`/`can_roll`/
+  `usable_items`/`countdown_seconds`/`animating_override`; forward-only actions; input
+  locked while animating; animate-once via the animator's `seq` gate; cutscene win>skip>turn
+  precedence — a skip banner survives the same-ingest turn advance). `client/scenes/lobby.py`
+  routes `S_GAME_STARTED`→`SnakesAndLaddersScene` + a `- bots N +` stepper sending
+  `C_START_GAME, bots=N` (capped to free seats so the count never lies / over-asks; hidden
+  when the room is full). Deleted `client/scenes/wrong_answers.py`; removed the remaining WAO
+  constants from `shared/protocol.py` + `config.py` (grepped: no live refs). README rewritten
+  for S&L. Headless `tests/test_snakes_scene.py` (+27) pins the wiring; full suite **198 green**;
+  draw path smoke-tested under SDL dummy across roll/wheel/shop/gameover. Manual desktop smoke
+  (window render / audio / cutscene visuals) is the one remaining human check.
 
 ---
 

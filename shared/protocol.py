@@ -31,10 +31,10 @@ C_START_GAME = "start_game"          # {bots?:int}       (host / human-host or a
 C_LEAVE_ROOM = "leave_room"          # {}
 C_PING = "ping"                      # {}
 
-# --- In-game: Wrong Answers Only (client -> server) -----------------------
+# --- In-game: generic show-runner controls (client -> server) -------------
+# Both apply to any minigame: the human host (or the auto-mode owner) drives the
+# flow and can end the game back to the lobby.
 
-C_SUBMIT_ANSWER = "submit_answer"    # {text}            (contestants, prompt phase)
-C_SUBMIT_VOTE = "submit_vote"        # {answer_id}       (contestants, vote phase)
 C_ADVANCE_PHASE = "advance_phase"    # {}                (show-runner: human host / auto owner)
 C_RETURN_TO_LOBBY = "return_to_lobby"  # {}              (show-runner) end game, back to lobby
 
@@ -62,14 +62,7 @@ S_PONG = "pong"                      # {}
 
 # --- Game identifiers -----------------------------------------------------
 
-GAME_WRONG_ANSWERS = "wrong_answers"
 GAME_SNAKES_AND_LADDERS = "snakes_and_ladders"
-
-# Wrong Answers Only phases (value of game["phase"] in an S_GAME_STATE payload).
-PHASE_PROMPT = "prompt"   # contestants type an answer
-PHASE_VOTE = "vote"       # contestants vote on the (anonymized) answers
-PHASE_REVEAL = "reveal"   # authorship + votes + round scores revealed
-PHASE_FINAL = "final"     # final scoreboard
 
 # Snakes & Ladders phases. Only two: the shop is an ``awaiting`` sub-state of
 # PHASE_PLAY (not a phase), which avoids "player changed but phase didn't" races.
@@ -92,8 +85,6 @@ ERR_NOT_ENOUGH_PLAYERS = "not_enough_players"
 ERR_NO_GAME = "no_game"
 ERR_WRONG_PHASE = "wrong_phase"
 ERR_NOT_CONTESTANT = "not_contestant"
-ERR_BAD_ANSWER = "bad_answer"
-ERR_BAD_VOTE = "bad_vote"
 # Snakes & Ladders turn errors.
 ERR_NOT_YOUR_TURN = "not_your_turn"      # acted when it isn't your turn
 ERR_WRONG_SUBSTATE = "wrong_substate"    # rolled while shopping, or shopped while rolling

@@ -38,18 +38,6 @@ ROOM_CODE_LENGTH = 4
 # (Reconnection-by-token is a future milestone; the grace period is designed in now.)
 DISCONNECT_GRACE_SECONDS = 20.0
 
-# --- Wrong Answers Only (first minigame) ----------------------------------
-# Need at least two contestants so there's always someone else to vote for.
-WAO_MIN_CONTESTANTS = 2
-WAO_TOTAL_ROUNDS = 3
-WAO_MAX_ANSWER_LEN = 80
-WAO_POINTS_PER_VOTE = 100
-# Auto-host phase budgets, in seconds (ignored in human-host mode, which is
-# advanced manually by the host).
-WAO_ANSWER_SECONDS = 60.0
-WAO_VOTE_SECONDS = 30.0
-WAO_REVEAL_SECONDS = 12.0
-
 # --- Snakes & Ladders (snake-heavy board game) ----------------------------
 # These are the runtime tunables; the pure ``SnakesAndLaddersGame`` mirrors them
 # as constructor defaults so it stays import-free of config (the connection layer
