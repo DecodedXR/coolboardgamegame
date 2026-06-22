@@ -26,6 +26,7 @@ from client.scenes.snakes_and_ladders import (
     animating_override,
     can_roll,
     countdown_seconds,
+    header_subtitle,
     is_runner,
     usable_items,
 )
@@ -192,6 +193,43 @@ def test_override_lerps_between_cells_mid_hop() -> None:
     bx, by = _LAYOUT.cell_to_xy(2)
     assert x == round(ax + (bx - ax) * 0.5)
     assert y == round(ay + (by - ay) * 0.5)
+
+
+# --- header_subtitle ------------------------------------------------------
+
+# A pid->name stub standing in for the scene's ``_name_of`` (Bob is "p2";
+# anything else resolves to "" so a bad lookup is visible in the assertion).
+_NAME_OF = lambda pid: {"p2": "Bob"}.get(pid, "")
+
+
+def test_header_subtitle_winner_takes_priority() -> None:
+    # Winner wins even if it's still notionally your turn.
+    assert header_subtitle(_gs(winner={"name": "Bob"}), _NAME_OF) == "Bob wins!"
+
+
+def test_header_subtitle_winner_falls_back_to_question_mark() -> None:
+    # Truthy winner row missing its "name" key -> the '?' fallback. (An empty
+    # dict is falsy and would skip the winner branch entirely, matching source.)
+    assert header_subtitle(_gs(winner={"id": "p9"}), _NAME_OF) == "? wins!"
+
+
+def test_header_subtitle_your_turn_shopping() -> None:
+    sub = header_subtitle(_gs(awaiting=protocol.AWAIT_SHOP), _NAME_OF)
+    assert sub == "your turn" + "  ·  shopping"
+
+
+def test_header_subtitle_your_turn_plain() -> None:
+    # Default _gs is your roll-turn, not shopping.
+    assert header_subtitle(_gs(), _NAME_OF) == "your turn"
+
+
+def test_header_subtitle_whose_turn_resolves_name() -> None:
+    sub = header_subtitle(_gs(your_turn=False, current_pid="p2"), _NAME_OF)
+    assert sub == "Bob's turn"
+
+
+def test_header_subtitle_idle_when_no_current_pid() -> None:
+    assert header_subtitle(_gs(your_turn=False, current_pid=None), _NAME_OF) == "..."
 
 
 # --- scene construction + actions -----------------------------------------

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import pygame
 
@@ -134,6 +134,21 @@ def animating_override(
     if anchor is None:
         return None
     return mover, layout.cell_to_xy(anchor)
+
+
+def header_subtitle(gs: dict[str, Any], name_of: Callable[[Optional[str]], str]) -> str:
+    """The header's one-line status under the title, in priority order: winner >
+    your-turn (+ shopping) > whose-turn > idle. Pure so every branch is testable
+    without the scene; ``name_of`` resolves a pid to a display name (only the
+    whose-turn branch needs it, so the helper stays display-only) and is invoked
+    lazily — exactly as the original draw code did — so a missing ``current_pid``
+    short-circuits to ``"..."`` without ever calling it."""
+    cur = gs.get("current_pid")
+    if gs.get("winner"):
+        return f"{gs['winner'].get('name', '?')} wins!"
+    if gs.get("your_turn"):
+        return "your turn" + ("  ·  shopping" if gs.get("awaiting") == AWAIT_SHOP else "")
+    return f"{name_of(cur)}'s turn" if cur else "..."
 
 
 # --- the scene ------------------------------------------------------------
@@ -468,13 +483,7 @@ class SnakesAndLaddersScene(Scene):
     def _draw_header(self, surf: pygame.Surface) -> None:  # pragma: no cover
         ui.Label("SNAKES & LADDERS", (_MARGIN, 24), 24, ui.ACCENT).draw(surf)
         gs = self.gs
-        cur = gs.get("current_pid")
-        if gs.get("winner"):
-            sub = f"{gs['winner'].get('name', '?')} wins!"
-        elif gs.get("your_turn"):
-            sub = "your turn" + ("  ·  shopping" if gs.get("awaiting") == AWAIT_SHOP else "")
-        else:
-            sub = f"{self._name_of(cur)}'s turn" if cur else "..."
+        sub = header_subtitle(gs, self._name_of)
         ui.Label(sub, (_MARGIN, 60), 18, ui.MUTED).draw(surf)
         remaining = countdown_seconds(gs.get("deadline"), time.time())
         if remaining is not None:
