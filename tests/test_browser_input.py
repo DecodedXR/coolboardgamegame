@@ -13,6 +13,7 @@ a recording fake — then assert that:
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import pygame
@@ -103,3 +104,50 @@ def test_connect_scene_browser_uses_baked_url(browser):
     assert app.name == "Noah"
     assert connected == [DEFAULT_SERVER_URL]
     assert app.server_url == DEFAULT_SERVER_URL
+
+
+# --- warm_up_server ---------------------------------------------------------
+# Demand-based wake-up for the sleeping free-tier server. The browser path can't
+# run under real Emscripten in CI, so we fake the pygbag-provided ``platform``
+# module (its ``window.eval`` is the JS bridge) via sys.modules.
+
+@pytest.fixture
+def fake_window(monkeypatch):
+    """Pretend we're in the browser with a recording ``platform.window.eval``."""
+    evaluated: list[str] = []
+    fake_platform = SimpleNamespace(
+        window=SimpleNamespace(eval=lambda js: evaluated.append(js)))
+    monkeypatch.setattr(browser_io, "is_browser", lambda: True)
+    monkeypatch.setitem(sys.modules, "platform", fake_platform)
+    return evaluated
+
+
+def test_warm_up_server_evals_no_cors_fetch(fake_window):
+    browser_io.warm_up_server("https://app.onrender.com/")
+    assert len(fake_window) == 1
+    js = fake_window[0]
+    # A fetch at the exact URL, with no-cors so the opaque response/preflight is moot.
+    assert js.startswith("fetch(")
+    assert '"https://app.onrender.com/"' in js  # json-encoded → valid JS string literal
+    assert "no-cors" in js
+
+
+def test_warm_up_server_is_noop_off_browser(monkeypatch):
+    evaluated: list[str] = []
+    monkeypatch.setattr(browser_io, "is_browser", lambda: False)
+    monkeypatch.setitem(sys.modules, "platform",
+                        SimpleNamespace(window=SimpleNamespace(
+                            eval=lambda js: evaluated.append(js))))
+    browser_io.warm_up_server("https://app.onrender.com/")
+    assert evaluated == []  # desktop never reaches the browser window
+
+
+def test_warm_up_server_swallows_interop_errors(monkeypatch):
+    def boom(js):
+        raise RuntimeError("no window")
+
+    monkeypatch.setattr(browser_io, "is_browser", lambda: True)
+    monkeypatch.setitem(sys.modules, "platform",
+                        SimpleNamespace(window=SimpleNamespace(eval=boom)))
+    # Best-effort: a failed wake must never crash app startup.
+    browser_io.warm_up_server("https://app.onrender.com/")

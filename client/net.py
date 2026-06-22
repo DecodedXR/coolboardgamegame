@@ -76,6 +76,29 @@ def build_ws_url(server: str, port: Optional[int] = None) -> str:
     return f"ws://{s}:{port}"
 
 
+def server_health_url(ws_url: str) -> str:
+    """The plain-HTTP root to GET in order to *wake* a websocket server.
+
+    Render's free tier spins the instance down after ~15 min idle; a bare HTTP
+    GET to ``/`` wakes it (the server answers any non-Upgrade request with 200 —
+    see ``server.__main__.health_check``). ``wss://`` maps to ``https://`` and
+    ``ws://`` to ``http://``; any path/query is dropped so the probe lands on the
+    root. An http(s) URL keeps its scheme; a scheme-less host assumes ``http://``
+    (the LAN case, which never sleeps anyway). This is the inverse of the http→ws
+    rewrite in :func:`build_ws_url`."""
+    s = (ws_url or "").strip()
+    low = s.lower()
+    for prefix, scheme in (("wss://", "https://"), ("ws://", "http://"),
+                           ("https://", "https://"), ("http://", "http://")):
+        if low.startswith(prefix):
+            rest = s[len(prefix):]
+            break
+    else:  # no recognized scheme → bare LAN host:port
+        scheme, rest = "http://", s
+    host = rest.split("/", 1)[0].split("?", 1)[0]  # host[:port], drop path/query
+    return f"{scheme}{host}/"
+
+
 class NetClient:
     """Client transport with the same public surface on every platform.
 

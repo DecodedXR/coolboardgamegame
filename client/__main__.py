@@ -13,7 +13,8 @@ from typing import Any, Optional
 
 import pygame
 
-from client.net import NetClient, EVT_DISCONNECTED, build_ws_url
+from client import browser_io
+from client.net import NetClient, EVT_DISCONNECTED, build_ws_url, server_health_url
 from client.scenes.base import Scene
 from client.scenes.connect import ConnectScene
 from config import DEFAULT_SERVER_URL, DEFAULT_CONNECT_HOST, DEFAULT_CONNECT_PORT
@@ -39,6 +40,10 @@ class App:
         self.name = "Player"
         self.server_url = DEFAULT_SERVER_URL or build_ws_url(
             DEFAULT_CONNECT_HOST, DEFAULT_CONNECT_PORT)
+        # Wake a sleeping free-tier server now (browser-only) so it's usually warm
+        # by the time the player finishes the connect screen — demand-based, so the
+        # instance is up only when someone's actually here (no 24/7 pinger).
+        browser_io.warm_up_server(server_health_url(self.server_url))
         self.you: Optional[dict[str, Any]] = None
         self.room: Optional[dict[str, Any]] = None
         self.gamestate: Optional[dict[str, Any]] = None

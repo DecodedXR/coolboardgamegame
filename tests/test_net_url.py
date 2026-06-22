@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from client.net import build_ws_url, NetClient
+from client.net import build_ws_url, NetClient, server_health_url
 
 
 @pytest.mark.parametrize("server, port, expected", [
@@ -50,6 +50,35 @@ def test_baked_default_server_url_is_secure_and_normalized():
 
     assert DEFAULT_SERVER_URL.startswith("wss://")  # TLS to the cloud server
     assert build_ws_url(DEFAULT_SERVER_URL) == DEFAULT_SERVER_URL
+
+
+@pytest.mark.parametrize("ws_url, expected", [
+    # ws/wss map onto the matching http scheme, landing on the root.
+    ("wss://app.onrender.com", "https://app.onrender.com/"),
+    ("ws://localhost:8765", "http://localhost:8765/"),
+    # Trailing slash / path / query are all dropped — the probe targets "/".
+    ("wss://app.onrender.com/", "https://app.onrender.com/"),
+    ("wss://app.onrender.com/ws?token=x", "https://app.onrender.com/"),
+    ("  wss://app.onrender.com  ", "https://app.onrender.com/"),
+    # Already-http(s) input keeps its scheme.
+    ("https://app.onrender.com", "https://app.onrender.com/"),
+    ("http://localhost:8765", "http://localhost:8765/"),
+    # Scheme-less LAN host assumes http (and never sleeps anyway).
+    ("localhost:8765", "http://localhost:8765/"),
+])
+def test_server_health_url(ws_url, expected):
+    assert server_health_url(ws_url) == expected
+
+
+def test_health_url_of_baked_default_is_https_root():
+    """The wake-up probe for the shipped default must be the HTTPS root of the
+    same host — exactly the endpoint server.__main__.health_check answers 200 on,
+    so a stray path or a downgraded scheme can't silently miss the wake."""
+    from config import DEFAULT_SERVER_URL
+
+    url = server_health_url(DEFAULT_SERVER_URL)
+    assert url == "https://" + DEFAULT_SERVER_URL[len("wss://"):].rstrip("/") + "/"
+    assert url.startswith("https://") and url.endswith("/")
 
 
 def test_connect_is_single_use():
