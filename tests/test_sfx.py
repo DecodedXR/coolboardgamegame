@@ -11,9 +11,13 @@ Two things matter and neither needs a real audio device:
 
 from __future__ import annotations
 
+import ast
+import inspect
+
 import pygame
 
 from client import sfx
+from client.token_anim import TokenAnimator
 
 
 def test_render_wav_returns_valid_wav_bytes() -> None:
@@ -174,6 +178,45 @@ def test_pump_skips_a_cue_already_built_lazily_by_play(monkeypatch) -> None:
     assert s._cache["roll"] is first       # same object: pump() did not overwrite the cache
 
 
+def _animation_step_tokens() -> list[str]:
+    """Every ``t`` value the animator's ``_build`` branches on, read straight from
+    its source via AST. Deriving this (instead of listing it) means a newly added
+    ``elif t == "<new>":`` branch is picked up automatically -- so if that branch
+    fires a cue with no ``sfx.SOUNDS`` spec, the guard below catches it without the
+    test needing a manual edit."""
+    fn = ast.parse(inspect.getsource(TokenAnimator._build).strip()).body[0]
+    tokens: list[str] = []
+    for node in ast.walk(fn):
+        # Match the chain's `t == "<literal>"` comparisons (t = s.get("t")).
+        if isinstance(node, ast.Compare) and isinstance(node.left, ast.Name) and node.left.id == "t":
+            for op, comp in zip(node.ops, node.comparators):
+                if isinstance(op, ast.Eq) and isinstance(comp, ast.Constant) and isinstance(comp.value, str):
+                    tokens.append(comp.value)
+    return tokens
+
+
+def _emitted_animation_cues() -> set[str]:
+    """The set of cue names the animator can actually fire, derived by running
+    ``_build`` over a step of every branch token. Each step carries a superset of
+    the fields any branch reads (``frm``/``to``/``path``), and ``debuff`` is fed in
+    both shapes so its slip-back slide *and* its generic-pause sub-branch are both
+    exercised."""
+    steps: list[dict] = []
+    for tok in _animation_step_tokens():
+        base = {"t": tok, "frm": 1, "to": 2, "path": [2]}
+        if tok == "debuff":
+            steps.append(dict(base, debuff="slip_back"))  # slide sub-branch
+            steps.append({"t": "debuff"})                 # generic-pause sub-branch
+        else:
+            steps.append(base)
+    segs = TokenAnimator()._build(steps)
+    return {seg.sfx for seg in segs if seg.sfx}
+
+
 def test_every_animation_sound_has_a_spec() -> None:
-    for name in ("roll", "hop", "snake", "ladder", "wheel", "gold", "debuff", "buy", "win"):
-        assert name in sfx.SOUNDS
+    # DERIVE the required cues from what the animator emits rather than hard-coding
+    # them: a new animation cue with no matching SOUNDS spec must fail this test.
+    cues = _emitted_animation_cues()
+    assert cues, "derived no animation cues -- the extraction is broken, not a real check"
+    missing = sorted(name for name in cues if name not in sfx.SOUNDS)
+    assert not missing, f"animation cues with no sfx.SOUNDS spec: {missing}"
