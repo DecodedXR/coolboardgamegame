@@ -372,6 +372,81 @@ def test_skip_banner_survives_the_turn_advance() -> None:
     assert scene.cutscene.text == "Bob skipped!"
 
 
+def test_win_banner_persists_and_holds_indefinitely() -> None:
+    # A winning turn must raise the win banner as a PERSISTENT cutscene (the game is
+    # over), not a timed one -> it never fades away on its own. The skip-test sibling
+    # for the win branch of _announce (event_text -> show_persistent, not show).
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(current_pid="p1")})
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        phase=protocol.PHASE_GAMEOVER, current_pid="p1", your_turn=False,
+        winner={"id": "p1", "name": "Alice"},
+        last_turn={"seq": 1, "pid": "p1", "name": "Alice", "steps": [
+            {"t": "roll", "die": 4, "raw": 4, "modifier": None},
+            {"t": "move", "frm": 96, "to": 100, "path": [97, 98, 99, 100]},
+            {"t": "win", "pid": "p1", "name": "Alice"},
+        ]},
+    )})
+    assert scene.cutscene.kind == "win"
+    assert scene.cutscene.text == "Alice wins!"
+    # Pump way past any timed banner's lifetime; the win banner must still be up.
+    run_scene(scene, until=lambda: not scene._busy)
+    for _ in range(200):
+        scene.update(0.1)            # >>> 2*fade + hold for a timed banner
+    assert scene.cutscene.is_active, "the win banner timed out instead of persisting"
+    assert scene.cutscene.text == "Alice wins!"
+
+
+def test_win_banner_is_not_clobbered_by_a_re_fed_turn_announce() -> None:
+    # The win replays with current_pid still on the mover (p2), then the server's
+    # final snapshot advances current_pid to the winner (p1) while re-sending the
+    # already-seen win turn. That advance is a genuine current_pid CHANGE with no new
+    # event banner, so only the `not winner` guard in _announce stops it from
+    # clobbering the persistent win banner with a routine "Alice's turn".
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    win_turn = {"seq": 1, "pid": "p1", "name": "Alice", "steps": [
+        {"t": "move", "frm": 96, "to": 100, "path": [97, 98, 99, 100]},
+        {"t": "win", "pid": "p1", "name": "Alice"},
+    ]}
+    # current_pid is still the in-flight mover (p2) when the win turn arrives.
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        phase=protocol.PHASE_GAMEOVER, current_pid="p2", your_turn=False,
+        winner={"id": "p1", "name": "Alice"}, last_turn=win_turn,
+    )})
+    run_scene(scene, until=lambda: not scene._busy)
+    assert scene.cutscene.kind == "win" and scene.cutscene.text == "Alice wins!"
+    # Final snapshot: current_pid advances to the winner (a real change), same turn
+    # seq (not re-queued, so no fresh event banner). The actor announce must no-op.
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        phase=protocol.PHASE_GAMEOVER, current_pid="p1", your_turn=False,
+        winner={"id": "p1", "name": "Alice"}, last_turn=win_turn,
+    )})
+    assert scene.cutscene.kind == "win", "the win banner was clobbered by an actor announce"
+    assert scene.cutscene.text == "Alice wins!"
+
+
+def test_turn_announcement_is_deduped_on_a_re_fed_current_pid() -> None:
+    # The routine "X's turn" fires once when current_pid changes; a re-fed snapshot
+    # carrying the SAME current_pid (no new turn) must not re-raise it (the
+    # _last_current de-dupe), so the banner is not perpetually restarted mid-fade.
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(current_pid="p2", your_turn=False)})
+    assert scene.cutscene.kind == "turn" and scene.cutscene.text == "Bob's turn"
+    scene.update(0.25)                       # let the banner advance into its fade
+    t_before = scene.cutscene._t
+    assert t_before > 0
+    # Same actor re-fed (a routine heartbeat broadcast) -> the announce must no-op,
+    # so the banner keeps ticking instead of resetting its clock to 0.
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(current_pid="p2", your_turn=False)})
+    assert scene.cutscene._t == t_before, "a re-fed current_pid restarted the turn banner"
+
+
 # --- input lock (BUG: gameover BACK was live during the win animation) -----
 
 def test_runner_cannot_tear_to_lobby_during_the_win_animation() -> None:
