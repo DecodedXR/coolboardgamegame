@@ -169,6 +169,11 @@ class SnakesAndLaddersScene(Scene):
         # broadcast but never changes mid-game, so cache the first one + its layout.
         self.board: Optional[dict[str, Any]] = None
         self.layout: Optional[BoardLayout] = None
+        # The static board (grid/numbers/glyphs/links/legend) is rasterized ONCE to
+        # this surface and blitted each frame; re-rendering ~100 cell numbers per
+        # frame is invisible on desktop but freezes the tab under single-threaded
+        # WASM. Built lazily on first draw, so it stays off the headless test path.
+        self._board_surf: Optional[pygame.Surface] = None
 
         # Cutscene/animation bookkeeping.
         self._last_current: Optional[str] = None
@@ -354,6 +359,20 @@ class SnakesAndLaddersScene(Scene):
             (_MARGIN, _BOARD_TOP, size, size),
         )
 
+    def _legend_rect(self) -> pygame.Rect:
+        size = self.app.width - _MARGIN * 2
+        return pygame.Rect(_MARGIN, _BOARD_TOP + size + 6, size, _LEGEND_H)
+
+    def _ensure_board_surface(self) -> None:
+        """Rasterize the static board (grid/numbers/glyphs/links/legend) once and
+        cache it; the board never changes mid-game, so redoing it every frame is
+        wasted work that freezes the tab under WASM — see ``_board_surf``. Lazy
+        (first draw) to stay off the headless test path, which never draws."""
+        if self._board_surf is None and self.layout is not None and self.board is not None:
+            self._board_surf = board_render.render_static(
+                self.layout, self.board,
+                (self.app.width, self.app.height), self._legend_rect())
+
     # --- per-frame update -------------------------------------------------
 
     def update(self, dt: float) -> None:
@@ -460,11 +479,12 @@ class SnakesAndLaddersScene(Scene):
         surf.fill(ui.BG)
         self._draw_header(surf)
         if self.layout is not None and self.board is not None:
-            board_render.draw_board(surf, self.layout, self.board)
+            self._ensure_board_surface()
+            if self._board_surf is not None:
+                surf.blit(self._board_surf, (0, 0))  # static grid + legend, drawn once
             override = animating_override(self.animator, self.layout)
             overrides = {override[0]: override[1]} if override else None
             board_render.draw_tokens(surf, self.layout, self.gs.get("players", []), overrides)
-            self._draw_legend(surf)
             # Wheel spin overlays the board center.
             if self.wheel.is_visible:
                 size = self.app.width - _MARGIN * 2
@@ -494,11 +514,6 @@ class SnakesAndLaddersScene(Scene):
         me = my_player(gs)
         if me:
             ui.Label(f"gold: {me.get('gold', 0)}", (_MARGIN, 90), 16, ui.GOOD).draw(surf)
-
-    def _draw_legend(self, surf: pygame.Surface) -> None:  # pragma: no cover
-        size = self.app.width - _MARGIN * 2
-        rect = pygame.Rect(_MARGIN, _BOARD_TOP + size + 6, size, _LEGEND_H)
-        board_render.draw_legend(surf, rect)
 
     def _draw_hud(self, surf: pygame.Surface) -> None:  # pragma: no cover
         # Usable powerup buttons (pre-roll, our turn).

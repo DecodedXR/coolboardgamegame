@@ -185,3 +185,26 @@ def draw_legend(surf: pygame.Surface, rect: pygame.Rect, text: str = LEGEND_TEXT
             line = trial
     if line:
         surf.blit(font.render(line, True, ui.MUTED), (rect.x, y))
+
+
+def render_static(
+    layout: BoardLayout,
+    board: dict[str, Any],
+    size: tuple[int, int],
+    legend_rect: pygame.Rect | None = None,
+) -> pygame.Surface:
+    """Pre-render the *unchanging* board onto a transparent surface ONCE.
+
+    The grid, cell numbers, tile glyphs, snake/ladder links, and (optionally) the
+    legend never change mid-game, yet :func:`draw_board` re-rasterizes ~100 cell
+    numbers via ``font.render`` on every call. That is invisible on desktop but
+    collapses the framerate under single-threaded WASM, where text rasterization is
+    far slower — so the scene draws this once and blits the result each frame,
+    keeping the per-frame board cost to a single blit. Drawn at the layout's
+    absolute coordinates onto a ``size``-sized SRCALPHA surface, so the caller blits
+    it at ``(0, 0)``."""
+    surf = pygame.Surface(size, pygame.SRCALPHA)
+    draw_board(surf, layout, board)
+    if legend_rect is not None:
+        draw_legend(surf, legend_rect)
+    return surf

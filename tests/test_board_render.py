@@ -8,6 +8,9 @@ row flips + pygame's y-grows-down inversion), so it is pinned precisely.
 
 from __future__ import annotations
 
+import pygame
+
+from client import board_render
 from client.board_render import BoardLayout, LEGEND_TEXT, cell_to_xy
 
 # A 10x10 board, 40px cells, origin at (0,0), bottom edge at y=400. With these
@@ -67,3 +70,33 @@ def test_layout_rounds_rows_up_for_a_partial_last_row() -> None:
 
 def test_legend_describes_the_snake_heavy_board() -> None:
     assert "snake" in LEGEND_TEXT.lower()
+
+
+# --- render_static: bake the unchanging board once ----------------------------
+# draw_board re-rasterizes ~100 cell numbers via font.render on every call; redoing
+# that each frame freezes the tab under single-threaded WASM. render_static draws
+# the static board (+ optional legend) into one surface so the scene blits it. We
+# stub the font/display-dependent draw_* helpers so the contract is checked headless.
+
+def test_render_static_bakes_board_and_legend_once(monkeypatch) -> None:
+    calls = {"board": 0, "legend": []}
+    monkeypatch.setattr(board_render, "draw_board",
+                        lambda s, l, b: calls.__setitem__("board", calls["board"] + 1))
+    monkeypatch.setattr(board_render, "draw_legend",
+                        lambda s, r: calls["legend"].append(r))
+    layout = BoardLayout(cells=100, cols=10, area=(0, 0, 480, 480))
+    rect = pygame.Rect(24, 562, 432, 38)
+    surf = board_render.render_static(layout, {"cells": 100, "cols": 10}, (480, 800), rect)
+    assert surf.get_size() == (480, 800)
+    assert calls["board"] == 1          # board rasterized exactly once
+    assert calls["legend"] == [rect]    # legend baked in at the given rect
+
+
+def test_render_static_skips_legend_when_no_rect(monkeypatch) -> None:
+    legend_calls = []
+    monkeypatch.setattr(board_render, "draw_board", lambda s, l, b: None)
+    monkeypatch.setattr(board_render, "draw_legend", lambda s, r: legend_calls.append(r))
+    layout = BoardLayout(cells=100, cols=10, area=(0, 0, 480, 480))
+    surf = board_render.render_static(layout, {"cells": 100, "cols": 10}, (480, 800))
+    assert surf.get_size() == (480, 800)
+    assert legend_calls == []

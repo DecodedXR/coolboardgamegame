@@ -247,6 +247,31 @@ def test_scene_caches_static_board_and_forwards_roll() -> None:
     assert app.net.sent == [(protocol.C_ROLL_DICE, {})]
 
 
+def test_static_board_surface_is_built_once(monkeypatch) -> None:
+    # The static board is rasterized to a surface once and reused; re-rendering it
+    # every frame is invisible on desktop but freezes the tab under single-threaded
+    # WASM. Stub the (font/display-dependent) render so the contract is headless.
+    from client import board_render
+
+    sentinel = object()
+    builds: list[Any] = []
+    monkeypatch.setattr(board_render, "render_static",
+                        lambda *a, **k: builds.append(a) or sentinel)
+
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        board={"cells": 100, "cols": 10, "snakes": {}, "ladders": {},
+               "wheel_tiles": [], "shop_tiles": [], "gold_tiles": [], "debuff_tiles": []},
+    )})
+    scene._ensure_board_surface()
+    scene._ensure_board_surface()  # later frames must reuse, not rebuild
+
+    assert len(builds) == 1
+    assert scene._board_surf is sentinel
+
+
 def test_scene_use_buy_skip_send_the_right_messages() -> None:
     app = FakeApp()
     scene = SnakesAndLaddersScene(app)
