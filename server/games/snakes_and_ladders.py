@@ -54,9 +54,10 @@ WHEEL_OUTCOMES = [
     {"kind": "debuff", "debuff": "gold_tax"},
 ]
 
-# ``awaiting`` sub-states within PHASE_PLAY.
-AWAIT_ROLL = "roll"
-AWAIT_SHOP = "shop"
+# ``awaiting`` sub-states within PHASE_PLAY; single-sourced in the protocol so this
+# authority and the client's replay UI never drift.
+AWAIT_ROLL = protocol.AWAIT_ROLL
+AWAIT_SHOP = protocol.AWAIT_SHOP
 
 
 class SnakesAndLaddersGame:

@@ -69,6 +69,12 @@ GAME_SNAKES_AND_LADDERS = "snakes_and_ladders"
 PHASE_PLAY = "play"           # the turn loop (game["awaiting"] is "roll" or "shop")
 PHASE_GAMEOVER = "gameover"   # someone reached the final cell; winner is set
 
+# ``awaiting`` sub-states within PHASE_PLAY (the ``game["awaiting"]`` value). The
+# server (authority) and client (replay UI) both key off these, so they live here
+# once rather than being re-declared in each module where they could drift.
+AWAIT_ROLL = "roll"
+AWAIT_SHOP = "shop"
+
 
 # --- Error codes ----------------------------------------------------------
 

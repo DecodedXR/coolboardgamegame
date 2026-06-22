@@ -41,10 +41,10 @@ from shared import protocol
 
 _MARGIN = 24
 
-# ``awaiting`` sub-state values within PHASE_PLAY (the wire contract; mirrors the
-# server's ``AWAIT_ROLL`` / ``AWAIT_SHOP`` in ``server/games/snakes_and_ladders.py``).
-AWAIT_ROLL = "roll"
-AWAIT_SHOP = "shop"
+# ``awaiting`` sub-state values within PHASE_PLAY. Single-sourced in the protocol
+# (shared with the server authority) and aliased here so the scene reads tersely.
+AWAIT_ROLL = protocol.AWAIT_ROLL
+AWAIT_SHOP = protocol.AWAIT_SHOP
 
 # Vertical budget (portrait 480x800): header, then a square board, a thin legend
 # strip, and a controls band — all comfortably under 800 (see the plan's A6).

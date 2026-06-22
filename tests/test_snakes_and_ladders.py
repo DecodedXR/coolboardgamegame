@@ -53,6 +53,21 @@ class FixedRng:
         pass
 
 
+def test_await_substates_are_single_sourced_in_protocol():
+    # The "roll"/"shop" awaiting sub-state values are a wire contract shared by the
+    # server (authority) and the client (replay UI), so they live ONCE in
+    # shared.protocol; both layers must reference that single source rather than
+    # re-declaring the literals (which previously sat in both modules and could drift).
+    from client.scenes import snakes_and_ladders as client_sal  # local: pulls pygame
+    from server.games import snakes_and_ladders as server_sal
+
+    assert (protocol.AWAIT_ROLL, protocol.AWAIT_SHOP) == ("roll", "shop")
+    assert (server_sal.AWAIT_ROLL, server_sal.AWAIT_SHOP) \
+        == (protocol.AWAIT_ROLL, protocol.AWAIT_SHOP)
+    assert (client_sal.AWAIT_ROLL, client_sal.AWAIT_SHOP) \
+        == (protocol.AWAIT_ROLL, protocol.AWAIT_SHOP)
+
+
 def clear_board(g):
     """Strip every special off the board so a scenario can place its own."""
     g.snakes = {}
