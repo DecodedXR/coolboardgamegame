@@ -81,11 +81,15 @@ class Room:
             self.host_id = self._next_connected_id() if self.host_mode == protocol.HOST_HUMAN else None
 
     def _next_connected_id(self) -> Optional[str]:
+        """The next *connected* player to inherit a role, or ``None`` if every
+        remaining slot is disconnected. Returning a disconnected ghost would defeat
+        the whole point of role repair (``mark_disconnected``'s "move roles off them
+        so play isn't stuck") and would lock out a fresh joiner — ``add_player``
+        re-seats ownership only when ``owner_id`` is ``None``."""
         for pid, p in self.players.items():
             if p.connected:
                 return pid
-        # Fall back to any remaining player, else nobody.
-        return next(iter(self.players), None)
+        return None
 
     # --- host control -----------------------------------------------------
 

@@ -20,6 +20,7 @@ import server.connection as connection
 from server.__main__ import health_check
 from server.connection import GameServer
 from server.games.snakes_and_ladders import AWAIT_ROLL, AWAIT_SHOP
+from server.rooms import Room
 from shared import protocol
 
 _CLOSE = object()
@@ -238,6 +239,49 @@ async def test_host_disconnect_promotes_next(monkeypatch):
 
     await b.drop()
     await tb
+
+
+# --- Room role repair: pure unit tests (no sockets) -----------------------
+# _next_connected_id underlies every owner/host repair (mark_disconnected,
+# remove_player, set_host_mode). Its contract is in the name: a role must never
+# be parked on a disconnected ghost — that is the very "stuck" state the
+# disconnect bookkeeping exists to avoid.
+
+
+def test_next_connected_id_never_returns_a_disconnected_ghost():
+    # Both players in a 2-seat room drop within the grace window (their slots are
+    # still present, awaiting expiry). The role-repair must hand ownership to NOBODY
+    # (None), not to a disconnected ghost.
+    room = Room(code="TEST", host_mode=protocol.HOST_HUMAN)
+    a = room.add_player("A", None)
+    b = room.add_player("B", None)
+    assert room.owner_id == a.id and room.host_id == a.id  # first player runs the show
+
+    room.mark_disconnected(a.id)
+    assert room.owner_id == b.id and room.host_id == b.id  # role moves to the live player
+
+    room.mark_disconnected(b.id)  # now EVERY remaining slot is disconnected
+    # The bug: the fallback returned next(iter(players)) — a disconnected ghost.
+    assert room.owner_id is None
+    assert room.host_id is None
+    # Stated directly: the helper itself must not surface a disconnected pid.
+    assert room._next_connected_id() is None
+
+
+def test_fresh_joiner_owns_a_room_whose_members_all_dropped():
+    # Observable consequence of the above: a player who JOINS during the grace window
+    # (the room isn't discarded until empty) must become owner/host and be allowed to
+    # start — otherwise the only connected player is locked out by a ghost owner.
+    room = Room(code="TEST", host_mode=protocol.HOST_HUMAN)
+    a = room.add_player("A", None)
+    b = room.add_player("B", None)
+    room.mark_disconnected(a.id)
+    room.mark_disconnected(b.id)
+
+    c = room.add_player("C", None)  # fresh connection joins the still-alive room
+    assert room.owner_id == c.id  # add_player claims ownership only when owner_id is None
+    assert room.host_id == c.id   # human-host mode: the new owner runs the show
+    assert room.can_start(c.id) is True
 
 
 # --- Health endpoint (M3 W2) ----------------------------------------------
