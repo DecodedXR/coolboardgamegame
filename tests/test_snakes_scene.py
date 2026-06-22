@@ -447,6 +447,37 @@ def test_turn_announcement_is_deduped_on_a_re_fed_current_pid() -> None:
     assert scene.cutscene._t == t_before, "a re-fed current_pid restarted the turn banner"
 
 
+def test_a_shop_skip_turn_does_not_lock_the_board_and_still_announces() -> None:
+    # A shop_skip commits last_turn = [{"t":"shop_skip",...}], which the animator turns
+    # into ZERO segments (a skip moves no token). The scene queues it like any turn, so
+    # _drain_pending calls begin() -- which returns True yet leaves the animator idle.
+    # Two contracts on this routine path: (1) the board must NOT be left _busy (a
+    # zero-segment turn has nothing to settle, so input must stay live), and (2) the
+    # next actor's turn-START banner must still fire exactly once. For a zero-segment
+    # turn the announce is reached by BOTH _drain_pending (it drains the queue to idle
+    # this same tick) AND the `if not self._busy` fallback in _ingest_state; the
+    # _last_current de-dupe collapses them to a single banner (not a double), and
+    # because the two paths are mutually redundant the actor is still announced even if
+    # only one of them is reached.
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(current_pid="p1")})  # P1's turn
+    # P1 skips the shop; the turn advances to P2 and carries the zero-segment last_turn.
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p2", your_turn=False,
+        last_turn={"seq": 1, "pid": "p1", "name": "Alice",
+                   "steps": [{"t": "shop_skip", "pid": "p1"}]},
+    )})
+    # The seq was consumed (so a re-fed snapshot won't replay it), the board is idle
+    # and not busy, and nothing is left queued.
+    assert scene._seen_seq == 1
+    assert not scene._busy and not scene.animator.is_playing and scene._pending == []
+    # The next actor was still announced exactly once (not skipped, not double-banner).
+    assert scene.cutscene.kind == "turn" and scene.cutscene.text == "Bob's turn"
+    assert scene._last_current == "p2"
+
+
 # --- input lock (BUG: gameover BACK was live during the win animation) -----
 
 def test_runner_cannot_tear_to_lobby_during_the_win_animation() -> None:

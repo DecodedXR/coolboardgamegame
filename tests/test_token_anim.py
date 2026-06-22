@@ -195,6 +195,27 @@ def test_buy_step_gets_a_beat_and_the_buy_cue() -> None:
     assert rec.played == ["buy"]
 
 
+def test_zero_segment_turn_consumes_the_seq_but_goes_idle_with_no_stale_mover() -> None:
+    # A shop_skip commits last_turn = [{"t":"shop_skip",...}], which _build turns into
+    # ZERO animation segments (shop_skip/shop_enter/tile produce no segment). begin()
+    # must still CONSUME the seq (so the turn isn't replayed again on the next snapshot)
+    # yet report idle immediately: is_playing False (the scene gates _busy on this, so
+    # input stays live for a turn that never moves), and every is_playing-gated view
+    # (mover/anchor_cell/wheel/progress) reads as "nothing to draw", with no cue fired.
+    rec = RecSfx()
+    a = TokenAnimator(sfx=rec)
+    assert a.begin(turn(1, [{"t": "shop_skip", "pid": "p1"}])) is True  # the seq was consumed
+    assert not a.is_playing                       # nothing animatable -> immediately idle
+    assert a.mover is None and a.anchor_cell is None and a.wheel is None
+    assert a.progress() is None
+    assert rec.played == []                        # a no-segment turn fires no cue
+    # The consumed seq is not replayed when the same snapshot is re-fed every frame...
+    assert a.begin(turn(1, [{"t": "shop_skip", "pid": "p1"}])) is False
+    # ...but the next genuine turn still plays normally.
+    assert a.begin(turn(2, [{"t": "move", "frm": 1, "to": 2, "path": [2]}])) is True
+    assert a.is_playing and a.mover == "p1"
+
+
 def test_anchor_pins_mover_at_origin_through_the_leading_roll_pause() -> None:
     a = TokenAnimator()
     a.begin(turn(1, [
