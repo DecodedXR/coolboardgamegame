@@ -92,13 +92,15 @@ class Sfx:
     def __init__(self) -> None:
         self._ok = False
         self._cache: dict[str, "pygame.mixer.Sound"] = {}
+        self._pending: list[str] = []  # cues queued for amortized synthesis
 
     def init(self) -> bool:
         """Bring audio up, returning whether it is available. Idempotent once
         successful, but *retries* after a failure: under browser autoplay policy
         the first click's ``mixer.init()`` can fail while a later click succeeds,
         so an early failure must not permanently silence the session. On success,
-        prewarm every cue off the animation hot path (see :meth:`_prewarm`)."""
+        *queue* every cue for amortized prewarm (one per :meth:`pump`) rather than
+        synthesizing all of them now — see :meth:`pump`."""
         if self._ok:
             return True
         try:
@@ -106,20 +108,29 @@ class Sfx:
         except Exception:  # no audio device / browser restriction -> silent, retry later
             return False
         self._ok = True
-        self._prewarm()
+        self._pending = list(SOUNDS)
         return True
 
-    def _prewarm(self) -> None:
-        """Render and cache every cue now — on the first click, where a one-time
-        stall is unnoticeable and the mixer is up — so :meth:`play` never runs the
-        pure-Python synth loop inside a frame (single-threaded pygbag/WASM would
-        hitch right as a slide/win animation starts). A failure for one cue is
-        ignored; ``play`` will rebuild it lazily."""
-        for name, spec in SOUNDS.items():
-            try:
-                self._cache[name] = pygame.mixer.Sound(io.BytesIO(_render_wav(spec)))
-            except Exception:
-                pass
+    def pump(self) -> None:
+        """Synthesize **at most one** queued cue, off the animation hot path. Call
+        once per frame (the scene does, from its ``update``): the nine cues build
+        over nine frames instead of all-at-once.
+
+        Why not build them all in :meth:`init`? The pure-Python synth loop costs
+        ~25ms for the full set on desktop but **10-50x that in single-threaded
+        pygbag/WASM** — and there it runs inside one frame with no yield to the
+        browser, freezing the tab for up to a second-plus right after the first
+        click. Drip-feeding keeps every frame cheap. A cue still missing when it is
+        first needed is built lazily by :meth:`play` (one small cue, not nine)."""
+        if not self._ok or not self._pending:
+            return
+        name = self._pending.pop()
+        if name in self._cache:
+            return
+        try:
+            self._cache[name] = pygame.mixer.Sound(io.BytesIO(_render_wav(SOUNDS[name])))
+        except Exception:  # one bad cue is ignored; play() will retry it lazily
+            pass
 
     def play(self, name: str) -> None:
         """Play a named cue, or do nothing if audio is unavailable / name unknown.

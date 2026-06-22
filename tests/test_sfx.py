@@ -86,7 +86,9 @@ def test_init_retries_after_a_failure(monkeypatch) -> None:
     assert state["calls"] == 2
 
 
-def test_init_prewarms_every_cue_off_the_hot_path(monkeypatch) -> None:
+def test_init_does_not_synthesize_in_frame_but_pump_amortizes_it(monkeypatch) -> None:
+    # WASM is single-threaded: building all cues at once blocks (freezes) a frame.
+    # init() must only queue them; pump() builds at most ONE per call.
     class FakeSound:
         def play(self):
             pass
@@ -96,11 +98,31 @@ def test_init_prewarms_every_cue_off_the_hot_path(monkeypatch) -> None:
     monkeypatch.setattr(pygame.mixer, "Sound", lambda *a, **k: built.append(1) or FakeSound())
     s = sfx.Sfx()
     assert s.init() is True
-    assert len(built) == len(sfx.SOUNDS)  # every cue synthesised up-front at init
-    # a later play() is a cache hit -> no further synthesis in-frame
+    assert built == []                       # nothing synthesised inside init()
+    s.pump()
+    assert len(built) == 1                    # one cue per pump
+    for _ in range(len(sfx.SOUNDS) + 5):      # drain the queue (extra pumps are no-ops)
+        s.pump()
+    assert len(built) == len(sfx.SOUNDS)      # every cue eventually built, none twice
+    # a later play() of an already-built cue is a cache hit -> no further synthesis
     before = len(built)
     s.play("snake")
     assert len(built) == before
+
+
+def test_play_builds_a_missing_cue_lazily(monkeypatch) -> None:
+    # If a cue is played before pump() got to it, play() synthesises that one cue.
+    class FakeSound:
+        def play(self):
+            pass
+
+    built: list[int] = []
+    monkeypatch.setattr(pygame.mixer, "init", lambda *a, **k: None)
+    monkeypatch.setattr(pygame.mixer, "Sound", lambda *a, **k: built.append(1) or FakeSound())
+    s = sfx.Sfx()
+    s.init()
+    s.play("win")                             # not pumped yet -> built on demand
+    assert len(built) == 1
 
 
 def test_every_animation_sound_has_a_spec() -> None:

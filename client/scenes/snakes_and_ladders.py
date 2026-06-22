@@ -271,6 +271,11 @@ class SnakesAndLaddersScene(Scene):
     # --- per-frame update -------------------------------------------------
 
     def update(self, dt: float) -> None:
+        # Drip-feed audio synthesis (one cue/frame) so the mixer warm-up never
+        # blocks a frame — critical under single-threaded WASM, where building all
+        # cues at once froze the tab right after the first click. No-op until the
+        # first click brings the mixer up, and once all cues are cached.
+        self.sfx.pump()
         self.animator.update(dt)
         self.wheel.update(dt)
         self.cutscene.update(dt)
