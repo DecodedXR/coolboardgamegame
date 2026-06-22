@@ -51,6 +51,17 @@ AWAIT_SHOP = "shop"
 _BOARD_TOP = 124
 _LEGEND_H = 38
 
+# Powerup-row layout: the pre-roll item buttons are fixed-size and wrap into
+# centered rows that stack UPWARD from a bottom anchor (just below the legend and
+# above ROLL). A common <=4-item hand is a single row at the anchor; larger hands
+# add rows above it so the row never overflows the 480px canvas. The anchor is the
+# long-standing single-row position; collision-safety with ROLL comes from growing
+# upward (the bottom row never moves down), not from coupling to ROLL's y.
+_ITEM_BTN_W = 104
+_ITEM_BTN_H = 40
+_ITEM_GAP = 8
+_ITEM_ROW_BOTTOM_Y = 596
+
 
 # --- pure decision helpers (unit-tested headless) -------------------------
 
@@ -355,22 +366,40 @@ class SnakesAndLaddersScene(Scene):
         self._sync_item_buttons()
 
     def _sync_item_buttons(self) -> None:
-        """Rebuild one small button per held powerup, laid out as a row above ROLL.
-        Hidden (empty) whenever it isn't our pre-roll turn."""
+        """Rebuild one small button per held powerup, wrapped into centered rows
+        above ROLL. Hidden (empty) whenever it isn't our pre-roll turn.
+
+        A single centered row of 5+ powerups overflows the 480px canvas off both
+        edges (``5*104 + 4*8 = 552 > 480`` -> first/last buttons clipped), and the
+        server hands out powerups without a cap, so the row WRAPS: at most
+        ``per_row`` fixed-size buttons sit on one row and the rest stack onto
+        further rows growing UPWARD from the bottom anchor (the <=4-item case is
+        unchanged; downward would collide with ROLL). Each row is centered
+        independently, so every button stays fully on-canvas."""
         items = usable_items(self.gs) if not self._busy else []
         if [i for i, _ in self._item_buttons] == items:
             return
         self._item_buttons = []
-        bw, gap = 104, 8
-        total = len(items) * bw + (len(items) - 1) * gap if items else 0
-        x = (self.app.width - total) // 2
-        for item in items:
-            from client.shop_ui import item_label
-            self._item_buttons.append(
-                (item, ui.Button(item_label(item), (x, 596, bw, 40),
-                                 lambda it=item: self._use(it)))
-            )
-            x += bw + gap
+        if not items:
+            return
+        from client.shop_ui import item_label
+        bw, bh, gap = _ITEM_BTN_W, _ITEM_BTN_H, _ITEM_GAP
+        # Most fixed-size buttons that fit one centered row (4 at 480px); the rest
+        # wrap onto further rows stacked upward. Build rows top-to-bottom so the
+        # flat button list stays in held-item order.
+        per_row = max(1, (self.app.width + gap) // (bw + gap))
+        rows = [items[i:i + per_row] for i in range(0, len(items), per_row)]
+        top_y = _ITEM_ROW_BOTTOM_Y - (len(rows) - 1) * (bh + gap)
+        for r, row_items in enumerate(rows):
+            y = top_y + r * (bh + gap)
+            row_w = len(row_items) * bw + (len(row_items) - 1) * gap
+            x = (self.app.width - row_w) // 2
+            for item in row_items:
+                self._item_buttons.append(
+                    (item, ui.Button(item_label(item), (x, y, bw, bh),
+                                     lambda it=item: self._use(it)))
+                )
+                x += bw + gap
 
     # --- input ------------------------------------------------------------
 

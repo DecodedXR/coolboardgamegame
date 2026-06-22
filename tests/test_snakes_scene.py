@@ -735,10 +735,9 @@ def test_item_button_row_is_horizontally_centered() -> None:
     assert xs == sorted(xs)
     for (_, a), (_, b) in zip(scene._item_buttons, scene._item_buttons[1:]):
         assert b.rect.x >= a.rect.right
-    # A realistic hand (<=4 distinct powerups) fits on the canvas. NB: a hand of 5+
-    # items overflows the row off-canvas (centered but unconstrained) -- a known
-    # cosmetic follow-up that needs a UX call on laying many buttons out, so it is
-    # deliberately left unpinned here rather than asserted either way.
+    # A realistic hand (<=4 distinct powerups) fits on a single centered row. A
+    # hand of 5+ overflows that row, so it wraps onto stacked rows instead -- see
+    # test_item_row_wraps_to_stacked_rows_when_the_hand_overflows_the_canvas.
     assert all(0 <= btn.rect.x and btn.rect.right <= scene.app.width
                for _, btn in scene._item_buttons)
 
@@ -791,3 +790,62 @@ def test_item_buttons_stay_hidden_through_a_real_replay_then_reappear() -> None:
     assert saw_busy_frame and not scene._busy, "the replay never finished"
     scene.update(0.0)                          # idle board: our pre-roll turn, boost in hand
     assert [name for name, _ in scene._item_buttons] == ["boost"]
+
+
+def _rows_by_y(buttons: list[tuple[str, Any]]) -> list[list[tuple[str, Any]]]:
+    """Group item buttons into rows by their shared ``rect.y``, ordered top
+    (smallest y) to bottom; within a row the buttons keep build order (L->R)."""
+    rows: dict[int, list[tuple[str, Any]]] = {}
+    for entry in buttons:
+        rows.setdefault(entry[1].rect.y, []).append(entry)
+    return [rows[y] for y in sorted(rows)]
+
+
+def test_item_row_wraps_to_stacked_rows_when_the_hand_overflows_the_canvas() -> None:
+    # Five powerups are wider than the 480px canvas as one centered row
+    # (5*104 + 4*8 = 552 > 480), which clipped the first/last buttons off both
+    # edges (x went negative). The row now WRAPS into stacked, independently
+    # centered rows so every button stays fully on-canvas -- Noah's call: wrap,
+    # not cap-to-4 (would hide a held item) or shrink.
+    _app, scene = _my_turn_holding("boost", "immunity", "double", "reroll", "boost")
+    scene._sync_item_buttons()
+    btns = scene._item_buttons
+    # Order is still flat item order, one button per held copy.
+    assert [name for name, _ in btns] == ["boost", "immunity", "double", "reroll", "boost"]
+    # THE fix: every button is fully on-canvas (the bug left x < 0 / right > width).
+    assert all(0 <= b.rect.x and b.rect.right <= scene.app.width for _, b in btns)
+    # At most 4 buttons per row (the most 104px buttons + 8px gaps that fit in 480:
+    # 4*104 + 3*8 = 440 <= 480 < 5*104 + 4*8). Five items -> rows of [4, 1].
+    rows = _rows_by_y(btns)
+    assert [len(r) for r in rows] == [4, 1]
+    # Each row is independently centered and laid left-to-right without overlap.
+    for row in rows:
+        left = row[0][1].rect.x
+        right = scene.app.width - row[-1][1].rect.right
+        assert abs(left - right) <= 1
+        for (_, a), (_, b) in zip(row, row[1:]):
+            assert b.rect.x >= a.rect.right
+    # The block is bottom-anchored: the bottom (last) row keeps the same y a small
+    # <=4 hand uses for its single row, and earlier rows stack strictly above it.
+    _app2, single = _my_turn_holding("boost", "immunity", "double")
+    single._sync_item_buttons()
+    anchor_y = single._item_buttons[0][1].rect.y
+    ys = sorted({b.rect.y for _, b in btns})
+    assert len(ys) == 2 and ys[-1] == anchor_y and ys[0] < anchor_y
+
+
+def test_item_rows_stack_upward_at_a_fixed_pitch_for_a_large_hand() -> None:
+    # A big hand wraps onto as many rows as needed (9 -> [4, 4, 1]), each row
+    # centered and on-canvas, stacked upward at a fixed pitch that never lets two
+    # rows overlap vertically.
+    _app, scene = _my_turn_holding(*(["boost"] * 9))
+    scene._sync_item_buttons()
+    btns = scene._item_buttons
+    assert len(btns) == 9
+    assert all(0 <= b.rect.x and b.rect.right <= scene.app.width for _, b in btns)
+    rows = _rows_by_y(btns)
+    assert [len(r) for r in rows] == [4, 4, 1]
+    ys = sorted({b.rect.y for _, b in btns})
+    pitches = [b - a for a, b in zip(ys, ys[1:])]
+    # Uniform pitch, and >= the button height (40) so rows never overlap vertically.
+    assert len(set(pitches)) == 1 and pitches[0] >= 40
