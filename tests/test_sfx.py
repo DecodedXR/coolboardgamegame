@@ -147,6 +147,33 @@ def test_pump_prewarms_cues_in_catalog_order_roll_first(monkeypatch) -> None:
     assert list(s._cache) == list(sfx.SOUNDS)    # full prewarm follows catalog order
 
 
+def test_pump_skips_a_cue_already_built_lazily_by_play(monkeypatch) -> None:
+    # play() can synthesise a cue on demand before pump() drains it from the queue
+    # (it stays in _pending until popped). When pump() later pops that name it must
+    # take the cache-hit branch: NO second synth (don't waste the once-per-frame synth
+    # budget pump() exists to ration) and the SAME Sound object is kept (don't swap out
+    # an instance the game may already be holding/looping).
+    class FakeSound:
+        def play(self) -> None:
+            pass
+
+    built: list[int] = []
+    monkeypatch.setattr(pygame.mixer, "init", lambda *a, **k: None)
+    monkeypatch.setattr(pygame.mixer, "Sound", lambda *a, **k: built.append(1) or FakeSound())
+    s = sfx.Sfx()
+    assert s.init() is True
+    s.play("roll")                         # lazily built + cached, but still queued in _pending
+    assert len(built) == 1
+    first = s._cache["roll"]
+
+    for _ in range(len(sfx.SOUNDS) + 5):   # drain the whole queue, incl. the queued "roll"
+        s.pump()
+
+    # roll was popped from _pending but NOT re-synthesised, and every OTHER cue built once.
+    assert len(built) == len(sfx.SOUNDS)   # 1 (lazy roll) + the remaining cues, roll not twice
+    assert s._cache["roll"] is first       # same object: pump() did not overwrite the cache
+
+
 def test_every_animation_sound_has_a_spec() -> None:
     for name in ("roll", "hop", "snake", "ladder", "wheel", "gold", "debuff", "buy", "win"):
         assert name in sfx.SOUNDS
