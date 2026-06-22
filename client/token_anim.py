@@ -86,6 +86,21 @@ class TokenAnimator:
         return self._wheel if self.is_playing else None
 
     @property
+    def wheel_progress(self) -> Optional[float]:
+        """Fraction (0..1) elapsed through the active wheel beat, or ``None`` when no
+        wheel segment is playing. The scene drives the Wheel widget's rotation from
+        *this* — the authoritative timeline clock — rather than a separate widget
+        clock: a long or stalled frame (``clock.tick`` isn't capped, e.g. a
+        backgrounded browser tab resuming) then advances the spin to its true
+        position, instead of a parallel clock flashing the un-spun wheel for a frame
+        and vanishing. ``self.wheel`` is non-``None`` only on the wheel pause segment,
+        so ``self._t`` is that beat's own elapsed time."""
+        if self.wheel is None:
+            return None
+        duration = self._queue[self._i].duration
+        return min(1.0, self._t / duration) if duration > 0 else 1.0
+
+    @property
     def anchor_cell(self) -> Optional[int]:
         """The mover's resting cell while ``is_playing`` but :meth:`progress` is
         ``None`` (a pause beat such as the opening dice roll): the start cell

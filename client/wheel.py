@@ -94,32 +94,33 @@ def slice_color(index: int) -> tuple[int, int, int]:
 
 
 class Wheel:
-    """Drives one wheel spin. The scene feeds it the server's wheel step via
-    :meth:`begin`, ticks :meth:`update` each frame, and :meth:`draw`s it while
-    :attr:`is_spinning`. The animator gates the spin's duration; this widget just
-    maps elapsed time to a rotation that lands on the server's ``index``."""
+    """Renders one wheel spin. The scene :meth:`drive`s it each frame with the
+    server's wheel step and the *animator's* wheel-beat progress, and :meth:`draw`s
+    it while :attr:`is_visible`. The widget holds **no clock of its own** — the
+    animator's timeline is the single source of truth for the spin's progress, so a
+    long or stalled frame can't desync a parallel clock (it just advances to its true
+    position). This widget only maps that progress to a rotation landing on the
+    server's ``index``."""
 
-    def __init__(self, duration: float = 1.6) -> None:
-        self.duration = duration
+    def __init__(self) -> None:
         self._step: Optional[dict[str, Any]] = None
-        self._t = 0.0
+        self._frac = 0.0
 
-    def begin(self, step: dict[str, Any]) -> None:
-        """Start spinning toward ``step["index"]`` over :attr:`duration` seconds."""
+    def drive(self, step: dict[str, Any], frac: float) -> None:
+        """Show ``step`` at spin progress ``frac`` (0..1, clamped) toward
+        ``step["index"]``. ``frac`` is the animator's wheel-beat fraction, so the
+        spin tracks the authoritative timeline rather than a parallel widget clock."""
         self._step = step
-        self._t = 0.0
-
-    def update(self, dt: float) -> None:
-        if self._step is not None:
-            self._t += dt
+        self._frac = 0.0 if frac < 0.0 else (1.0 if frac > 1.0 else frac)
 
     def reset(self) -> None:
         self._step = None
-        self._t = 0.0
+        self._frac = 0.0
 
     @property
-    def is_spinning(self) -> bool:
-        return self._step is not None and self._t < self.duration
+    def is_visible(self) -> bool:
+        """Whether a wheel spin is on screen (a step is being driven)."""
+        return self._step is not None
 
     @property
     def angle(self) -> float:
@@ -129,8 +130,7 @@ class Wheel:
             return 0.0
         table = self._step.get("table") or []
         n = max(1, len(table))
-        frac = self._t / self.duration if self.duration > 0 else 1.0
-        return spin_angle(int(self._step.get("index", 0)), n, frac)
+        return spin_angle(int(self._step.get("index", 0)), n, self._frac)
 
     def draw(self, surf: "pygame.Surface", center: tuple[int, int], radius: int) -> None:
         """Render the spinning wheel and its pointer. Needs a real Surface/font, so

@@ -135,7 +135,7 @@ class SnakesAndLaddersScene(Scene):
         # it as the timeline replays.
         self.sfx = Sfx()
         self.animator = TokenAnimator(self.sfx)
-        self.wheel = Wheel(duration=TokenAnimator.WHEEL_SECONDS)
+        self.wheel = Wheel()
         self.cutscene = Cutscene()
         self.shop = ShopUI(self._buy, self._skip_shop)
 
@@ -146,7 +146,6 @@ class SnakesAndLaddersScene(Scene):
 
         # Cutscene/animation bookkeeping.
         self._last_current: Optional[str] = None
-        self._wheel_step: Optional[dict[str, Any]] = None
         # Turn replays waiting their turn. A fresh broadcast must never clobber an
         # in-flight replay (bots roll faster than a turn animates), so new turns
         # queue here and begin only once the animator is idle (see _drain_pending).
@@ -281,8 +280,10 @@ class SnakesAndLaddersScene(Scene):
         """Stop the current replay and drop any queued turns — used when leaving the
         scene so a stale backlog can't restart an animation on a torn-down board. The
         _pending queue is scene state paralleling the animator's in-flight state, so
-        the two are cleared together."""
+        the two are cleared together; the wheel overlay is downstream of the animator,
+        so it clears with it."""
         self.animator.reset()
+        self.wheel.reset()
         self._pending.clear()
 
     def _drain_pending(self) -> None:
@@ -339,18 +340,16 @@ class SnakesAndLaddersScene(Scene):
         # of bot turns replays in order (snapping past stale ones when behind).
         self._drain_pending()
         self.animator.update(dt)
-        self.wheel.update(dt)
         self.cutscene.update(dt)
 
-        # Hand the wheel its spin when the animator reaches a wheel beat, and let it
-        # go once that beat passes. ``animator.wheel`` is the same dict instance for
-        # the whole beat, so identity tells us when a *new* wheel step begins.
-        wstep = self.animator.wheel
-        if wstep is not None and wstep is not self._wheel_step:
-            self._wheel_step = wstep
-            self.wheel.begin(wstep)
-        elif wstep is None and self._wheel_step is not None:
-            self._wheel_step = None
+        # Drive the wheel straight from the animator's wheel-beat progress, so the
+        # spin tracks the authoritative timeline: a long/stalled frame advances it to
+        # its true position instead of a parallel widget clock flashing the un-spun
+        # wheel for a frame and vanishing.
+        wprog = self.animator.wheel_progress
+        if wprog is not None:
+            self.wheel.drive(self.animator.wheel, wprog)
+        elif self.wheel.is_visible:
             self.wheel.reset()
 
         self._sync_item_buttons()
@@ -423,7 +422,7 @@ class SnakesAndLaddersScene(Scene):
             board_render.draw_tokens(surf, self.layout, self.gs.get("players", []), overrides)
             self._draw_legend(surf)
             # Wheel spin overlays the board center.
-            if self.wheel.is_spinning:
+            if self.wheel.is_visible:
                 size = self.app.width - _MARGIN * 2
                 self.wheel.draw(surf, (self.app.width // 2, _BOARD_TOP + size // 2), 130)
         self._draw_hud(surf)

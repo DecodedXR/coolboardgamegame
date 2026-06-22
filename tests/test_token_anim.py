@@ -137,6 +137,34 @@ def test_wheel_step_is_exposed_only_during_its_segment() -> None:
     assert a.wheel is None
 
 
+def test_wheel_progress_tracks_elapsed_through_the_wheel_beat() -> None:
+    # The scene drives the Wheel widget from this fraction (the authoritative timeline
+    # clock), so a long/stalled frame advances the spin to its true position instead
+    # of desyncing a separate widget clock that would flash the un-spun wheel.
+    a = TokenAnimator()
+    wheel_step = {
+        "t": "wheel",
+        "table": [{"kind": "gold", "amount": 50}] * 4,
+        "index": 2,
+        "outcome": {"kind": "gold", "amount": 50},
+    }
+    a.begin(turn(1, [
+        {"t": "move", "frm": 1, "to": 2, "path": [2]},
+        wheel_step,
+        {"t": "gold", "pid": "p1", "delta": 50, "total": 150},
+    ]))
+    assert a.wheel_progress is None                      # during the hop: no wheel beat
+    a.update(TokenAnimator.HOP_SECONDS)                  # finish the hop -> enter the beat
+    assert a.wheel_progress == 0.0                       # at the very start of the spin
+    a.update(TokenAnimator.WHEEL_SECONDS / 2)
+    assert abs(a.wheel_progress - 0.5) < 1e-9            # halfway through the beat
+    a.update(TokenAnimator.WHEEL_SECONDS / 2 + 0.1)      # cross into the trailing gold beat
+    assert a.is_playing and a.wheel is None              # past the wheel beat, now on gold
+    assert a.wheel_progress is None                      # no wheel progress outside the beat
+    run_to_end(a)
+    assert a.wheel_progress is None
+
+
 def test_progress_is_none_during_pause_segments() -> None:
     a = TokenAnimator()
     a.begin(turn(1, [{"t": "roll", "die": 2, "raw": 2, "modifier": None}]))

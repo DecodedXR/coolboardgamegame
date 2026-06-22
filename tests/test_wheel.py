@@ -67,31 +67,34 @@ def test_slice_labels_cover_the_servers_whole_wheel_table() -> None:
         assert label and label != "?", outcome
 
 
-def test_wheel_widget_spins_then_settles_on_the_chosen_index() -> None:
+def test_wheel_widget_renders_the_chosen_index_when_driven_to_rest() -> None:
+    # The widget holds no clock: the scene drives it with the animator's wheel-beat
+    # fraction, and it maps that to a rotation landing the chosen slice under the
+    # pointer. (The flash bug was a separate widget clock that began a frame behind.)
     step = {
         "t": "wheel",
         "table": [{"kind": "gold", "amount": 50}] * 8,
         "index": 6,
         "outcome": {"kind": "gold", "amount": 50},
     }
-    w = Wheel(duration=1.6)
-    assert not w.is_spinning            # idle before begin
-    w.begin(step)
-    assert w.is_spinning
-    assert w.angle == 0.0               # starts unrotated
-    w.update(0.8)
-    assert w.is_spinning                # mid-spin
-    w.update(1.0)                       # past the duration
-    assert not w.is_spinning
-    # Settled: the widget's final angle puts slice 6 under the pointer.
+    w = Wheel()
+    assert not w.is_visible             # nothing on screen before it is driven
+    w.drive(step, 0.0)
+    assert w.is_visible and w.angle == 0.0     # shown, unrotated at the start of the spin
+    w.drive(step, 0.5)
+    assert w.angle > 0.0                        # mid-spin
+    w.drive(step, 1.0)                          # driven to the end of the beat
+    assert slice_at_pointer(w.angle, 8) == 6    # settles with slice 6 under the pointer
+    w.drive(step, 9.9)                          # an over-long frame is clamped, not over-spun
     assert slice_at_pointer(w.angle, 8) == 6
 
 
 def test_wheel_reset_clears_the_spin() -> None:
     w = Wheel()
-    w.begin({"table": [{"kind": "gold", "amount": 1}] * 4, "index": 2})
+    w.drive({"table": [{"kind": "gold", "amount": 1}] * 4, "index": 2}, 0.5)
+    assert w.is_visible
     w.reset()
-    assert not w.is_spinning
+    assert not w.is_visible
     assert w.angle == 0.0
 
 

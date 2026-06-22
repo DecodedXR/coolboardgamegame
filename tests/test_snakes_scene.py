@@ -20,6 +20,7 @@ import pygame
 
 from client.board_render import BoardLayout
 from client.token_anim import TokenAnimator
+from client.wheel import rest_angle, slice_at_pointer, spin_angle
 from client.scenes.snakes_and_ladders import (
     SnakesAndLaddersScene,
     animating_override,
@@ -535,3 +536,85 @@ def test_leaving_the_scene_drops_queued_turns() -> None:
     from client.scenes.lobby import LobbyScene
     assert scene._pending == [] and not scene.animator.is_playing
     assert isinstance(app.scene, LobbyScene)   # the teardown path actually ran
+
+
+# --- wheel hand-off (BUG: a long frame flashed the un-spun wheel, then vanished) ---
+
+_WHEEL_TABLE = [
+    {"kind": "gold", "amount": 5}, {"kind": "debuff", "debuff": "skip_next"},
+    {"kind": "item", "item": "boost"}, {"kind": "gold", "amount": 9},
+]
+
+
+def _wheel_turn(seq: int = 1, index: int = 1) -> dict[str, Any]:
+    """A one-roll turn that lands on a wheel tile: roll -> 3 hops -> wheel -> gold."""
+    return {"seq": seq, "pid": "p1", "name": "Alice", "steps": [
+        {"t": "roll", "die": 3, "raw": 3, "modifier": None},
+        {"t": "move", "frm": 1, "to": 4, "path": [2, 3, 4]},
+        {"t": "wheel", "table": _WHEEL_TABLE, "index": index,
+         "outcome": _WHEEL_TABLE[index]},
+        {"t": "gold", "amount": 5},
+    ]}
+
+
+def _start_wheel_turn(index: int = 1) -> SnakesAndLaddersScene:
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p2", your_turn=False, last_turn=_wheel_turn(index=index))})
+    return scene
+
+
+def test_a_long_frame_renders_the_wheel_at_its_true_spin_not_unspun() -> None:
+    # clock.tick() isn't clamped, so a backgrounded browser tab resumes with ONE big
+    # dt and the animator blows deep into the wheel beat that single frame. The wheel
+    # must render at its TRUE progress in the spin, not flash at its un-spun start
+    # (angle 0) and vanish -- the old parallel widget clock began() at _t=0 a frame
+    # behind the animator, so a long frame only ever showed frac 0.
+    scene = _start_wheel_turn(index=1)
+    # One big frame: past roll (.4) + 3 hops (.54), then halfway (0.8s) into the 1.6s beat.
+    scene.update(TokenAnimator.ROLL_SECONDS + 3 * TokenAnimator.HOP_SECONDS
+                 + TokenAnimator.WHEEL_SECONDS / 2)
+    assert scene.wheel.is_visible
+    # The widget tracks the animator's beat exactly (it is driven from wheel_progress),
+    # so it sits ~half-spun -- well past the un-spun start, never at angle 0.
+    prog = scene.animator.wheel_progress
+    assert prog is not None and prog > 0.4
+    assert scene.wheel.angle == spin_angle(1, len(_WHEEL_TABLE), prog)
+    assert scene.wheel.angle > 0.5 * rest_angle(1, len(_WHEEL_TABLE))
+
+
+def test_the_wheel_tracks_the_animator_across_the_beat_then_clears() -> None:
+    # Integrated animator+wheel seam (the audit found no test covered it): stepped
+    # frame-by-frame, the wheel follows the animator's wheel beat without ever visibly
+    # reversing, settles on the chosen slice, and disappears the instant the beat ends
+    # and the trailing gold beat begins.
+    scene = _start_wheel_turn(index=2)
+    run_scene(scene, until=lambda: scene.animator.wheel_progress is not None, dt=0.02)
+    prev = -1.0
+    last_angle = 0.0
+    saw_spin = False
+    while scene.animator.wheel_progress is not None:
+        assert scene.wheel.is_visible
+        angle = scene.wheel.angle
+        assert angle >= prev - 1e-9          # monotonic: the wheel never visibly reverses
+        prev = angle
+        last_angle = angle
+        saw_spin = True
+        scene.update(0.05)
+    assert saw_spin
+    assert slice_at_pointer(last_angle, len(_WHEEL_TABLE)) == 2   # settled on the chosen slice
+    # The beat is over; the overlay is gone even though the animator (gold beat) plays on.
+    assert not scene.wheel.is_visible
+    assert scene.animator.is_playing
+
+
+def test_leaving_the_scene_clears_the_wheel_overlay() -> None:
+    # The wheel overlay is downstream of the animator, so tearing down the scene
+    # mid-spin must clear it too -- it must not linger on a torn-down board.
+    scene = _start_wheel_turn(index=1)
+    run_scene(scene, until=lambda: scene.wheel.is_visible, dt=0.02)
+    assert scene.wheel.is_visible
+    scene.on_message({"type": protocol.S_RETURN_TO_LOBBY})
+    assert not scene.wheel.is_visible
