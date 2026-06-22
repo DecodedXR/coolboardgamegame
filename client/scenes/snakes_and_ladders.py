@@ -147,6 +147,14 @@ class SnakesAndLaddersScene(Scene):
         # Cutscene/animation bookkeeping.
         self._last_current: Optional[str] = None
         self._wheel_step: Optional[dict[str, Any]] = None
+        # Turn replays waiting their turn. A fresh broadcast must never clobber an
+        # in-flight replay (bots roll faster than a turn animates), so new turns
+        # queue here and begin only once the animator is idle (see _drain_pending).
+        # _seen_seq is the latest turn seq already queued, so a re-fed snapshot is
+        # not enqueued twice; any *different* seq (including a new game's reset to 1)
+        # does enqueue, mirroring the animator's own seq gate.
+        self._pending: list[dict[str, Any]] = []
+        self._seen_seq = 0
 
         # Persistent controls. Item buttons are rebuilt per frame from the hand.
         self.roll_btn = ui.Button("ROLL", (w // 2 - 90, 648, 180, 54), self._roll)
@@ -161,6 +169,14 @@ class SnakesAndLaddersScene(Scene):
     @property
     def gs(self) -> dict[str, Any]:
         return self.app.gamestate or {}
+
+    @property
+    def _busy(self) -> bool:
+        """The board is settling: a replay is in-flight OR a just-arrived turn is
+        queued to start. ROLL and the other controls stay locked until this clears
+        (the queue can be non-empty for a frame before update() drains it), so no
+        one acts on a board that is about to move."""
+        return self.animator.is_playing or bool(self._pending)
 
     @property
     def my_id(self) -> Optional[str]:
@@ -186,7 +202,7 @@ class SnakesAndLaddersScene(Scene):
     # --- actions (forward-only; the server decides everything) ------------
 
     def _roll(self) -> None:
-        if can_roll(self.gs, self.animator.is_playing):
+        if can_roll(self.gs, self._busy):
             self.app.net.send(protocol.C_ROLL_DICE)
 
     def _use(self, item: str) -> None:
@@ -209,7 +225,7 @@ class SnakesAndLaddersScene(Scene):
         self.app.you = None
         self.app.room = None
         self.app.gamestate = None
-        self.animator.reset()
+        self._reset_animation()
         from client.scenes.menu import MenuScene
         self.app.go_to(MenuScene(self.app))
 
@@ -223,7 +239,7 @@ class SnakesAndLaddersScene(Scene):
             self.app.room = msg["room"]
         elif t == protocol.S_RETURN_TO_LOBBY:
             self.app.gamestate = None
-            self.animator.reset()
+            self._reset_animation()
             from client.scenes.lobby import LobbyScene
             self.app.go_to(LobbyScene(self.app))
 
@@ -233,12 +249,65 @@ class SnakesAndLaddersScene(Scene):
             self.board = game["board"]
             self._build_layout()
 
-        # A new turn (seq bump) starts the replay; the animator ignores a re-fed
-        # same-seq snapshot, so this is safe to call on every broadcast.
-        started = self.animator.begin(game.get("last_turn"))
+        # Queue a genuinely-new turn instead of replaying it now: a fresh broadcast
+        # must never clobber an in-flight replay (bots roll ~1.2s apart but a turn
+        # can animate for ~3s). _drain_pending starts the next queued turn the moment
+        # the animator is idle. current_pid/winner ride along so that turn's
+        # post-turn banner ("X's turn" / skip / win) fires at its START, tracking the
+        # animation instead of jumping ahead to the latest snapshot.
+        lt = game.get("last_turn")
+        if lt is not None and lt.get("seq", 0) != self._seen_seq:
+            self._seen_seq = lt.get("seq", 0)
+            self._pending.append({
+                "last_turn": lt,
+                "current_pid": game.get("current_pid"),
+                "winner": bool(game.get("winner")),
+            })
+        self._drain_pending()
+
+        # Nothing to replay (game start, or a re-fed snapshot): announce the actor
+        # right away so the very first "X's turn" still shows. While a replay is
+        # queued or playing, _busy is set and the announce defers to the turn START
+        # in _drain_pending — which ran just above, so for a zero-segment turn (begin
+        # returned but is_playing is already False) _last_current is already set and
+        # this fallback is a de-duped no-op, not a double banner.
+        if not self._busy:
+            self._announce(game.get("current_pid"), bool(game.get("winner")), None)
+
+        # Private shop stock is present only while it's our shop sub-state.
+        self.shop.set_stock((game.get("shop") or {}).get("stock"))
+
+    def _reset_animation(self) -> None:
+        """Stop the current replay and drop any queued turns — used when leaving the
+        scene so a stale backlog can't restart an animation on a torn-down board. The
+        _pending queue is scene state paralleling the animator's in-flight state, so
+        the two are cleared together."""
+        self.animator.reset()
+        self._pending.clear()
+
+    def _drain_pending(self) -> None:
+        """Start the next queued turn once the animator goes idle. If more than one
+        is waiting we have fallen behind (a turn animates slower than bots roll), so
+        snap past the stale ones and replay only the newest: every non-animating
+        token already sits at its authoritative position, so only the unseen replays
+        are dropped, never game state."""
+        if self.animator.is_playing or not self._pending:
+            return
+        record = self._pending[-1]
+        self._pending.clear()
+        self.animator.begin(record["last_turn"])
+        self._announce(record["current_pid"], record["winner"], record["last_turn"])
+
+    def _announce(self, current_pid: Optional[str], winner: bool,
+                  last_turn: Optional[dict[str, Any]]) -> None:
+        """Raise the turn-START banner: a notable event from the just-finished turn
+        (a win persists; a skip names the skipped player) outranks the routine
+        "X's turn", so a "Bob skipped!" / win banner is never instantly clobbered by
+        "Carol's turn". The actor announce is de-duped on _last_current so a re-fed
+        current_pid does not re-banner."""
         event_banner = False
-        if started:
-            ev = event_text(game.get("last_turn"))
+        if last_turn is not None:
+            ev = event_text(last_turn)
             if ev:
                 text, kind = ev
                 if kind == "win":
@@ -246,20 +315,10 @@ class SnakesAndLaddersScene(Scene):
                 else:
                     self.cutscene.show(text, kind=kind)
                 event_banner = True
-
-        # Announce the new actor when the authoritative turn passes — but never
-        # clobber a notable banner just raised *this* ingest. A skip almost always
-        # advances current_pid, so without this guard the "Bob skipped!" banner
-        # would be instantly overwritten by "Carol's turn" and never seen; a win
-        # banner must persist for the same reason.
-        cur = game.get("current_pid")
-        if cur != self._last_current:
-            self._last_current = cur
-            if cur is not None and not game.get("winner") and not event_banner:
-                self.cutscene.show(turn_text(self._name_of(cur)))
-
-        # Private shop stock is present only while it's our shop sub-state.
-        self.shop.set_stock((game.get("shop") or {}).get("stock"))
+        if current_pid != self._last_current:
+            self._last_current = current_pid
+            if current_pid is not None and not winner and not event_banner:
+                self.cutscene.show(turn_text(self._name_of(current_pid)))
 
     def _build_layout(self) -> None:
         size = self.app.width - _MARGIN * 2
@@ -276,6 +335,9 @@ class SnakesAndLaddersScene(Scene):
         # cues at once froze the tab right after the first click. No-op until the
         # first click brings the mixer up, and once all cues are cached.
         self.sfx.pump()
+        # Start the next queued turn the instant the animator frees up, so a backlog
+        # of bot turns replays in order (snapping past stale ones when behind).
+        self._drain_pending()
         self.animator.update(dt)
         self.wheel.update(dt)
         self.cutscene.update(dt)
@@ -296,7 +358,7 @@ class SnakesAndLaddersScene(Scene):
     def _sync_item_buttons(self) -> None:
         """Rebuild one small button per held powerup, laid out as a row above ROLL.
         Hidden (empty) whenever it isn't our pre-roll turn."""
-        items = usable_items(self.gs) if not self.animator.is_playing else []
+        items = usable_items(self.gs) if not self._busy else []
         if [i for i, _ in self._item_buttons] == items:
             return
         self._item_buttons = []
@@ -321,10 +383,11 @@ class SnakesAndLaddersScene(Scene):
         self.leave_btn.handle(event)
 
         # Lock every control (the runner's NEXT/BACK included) while the board is
-        # still settling, so nobody acts on — or tears down, mid-win-animation —
-        # a board that hasn't finished replaying. Only LEAVE (handled above) stays
-        # live, since a player must always be able to quit.
-        if self.animator.is_playing:
+        # still settling — animating OR a just-arrived turn still queued — so nobody
+        # acts on (or tears down, mid-win-animation) a board that hasn't finished
+        # replaying. Only LEAVE (handled above) stays live, since a player must
+        # always be able to quit.
+        if self._busy:
             return
 
         if self.phase == protocol.PHASE_GAMEOVER:
@@ -366,7 +429,7 @@ class SnakesAndLaddersScene(Scene):
         self._draw_hud(surf)
         # Shop overlay (current player's private stock) sits over the board.
         if self.gs.get("your_turn") and self.gs.get("awaiting") == AWAIT_SHOP \
-                and not self.animator.is_playing:
+                and not self._busy:
             self.shop.draw(surf, self._shop_panel())
         # The between-turns / win cutscene banner.
         if self.cutscene.is_active:
@@ -404,7 +467,7 @@ class SnakesAndLaddersScene(Scene):
         # Usable powerup buttons (pre-roll, our turn).
         for _item, btn in self._item_buttons:
             btn.draw(surf)
-        if can_roll(self.gs, self.animator.is_playing):
+        if can_roll(self.gs, self._busy):
             self.roll_btn.draw(surf)
 
     def _draw_controls(self, surf: pygame.Surface) -> None:  # pragma: no cover

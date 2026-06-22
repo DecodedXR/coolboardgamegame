@@ -353,3 +353,185 @@ def test_runner_cannot_tear_to_lobby_during_the_win_animation() -> None:
     cx, cy = scene.back_btn.rect.center
     scene.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(cx, cy)))
     assert (protocol.C_RETURN_TO_LOBBY, {}) not in app.net.sent
+
+
+# --- animation queueing (BUG: a fresh broadcast clobbered the in-flight replay) ---
+
+class _CueLog:
+    """A cue sink that records what the animator played, so a test can prove which
+    queued turns actually replayed."""
+
+    def __init__(self) -> None:
+        self.played: list[str] = []
+
+    def play(self, name: str) -> None:
+        self.played.append(name)
+
+
+def run_scene(scene: SnakesAndLaddersScene, *, until: Any, dt: float = 0.05,
+              cap: int = 100000) -> None:
+    """Pump ``scene.update`` (the real per-frame call) until ``until()`` holds."""
+    n = 0
+    while not until() and n < cap:
+        scene.update(dt)
+        n += 1
+    assert until(), "scene did not reach the expected state"
+
+
+def test_a_rapid_second_turn_does_not_clobber_the_first_replay() -> None:
+    # Bots broadcast turns ~1.2s apart, but one turn's replay (roll + hops + wheel +
+    # gold) can run ~3s. The scene used to call animator.begin() on every broadcast,
+    # hard-resetting the in-flight replay -> the token teleported and the prior
+    # turn's hops/wheel/gold were silently dropped. A fresh turn must QUEUE behind
+    # the one still playing.
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p2", your_turn=False,
+        last_turn={"seq": 1, "pid": "p1", "name": "Alice", "steps": [
+            {"t": "roll", "die": 5, "raw": 5, "modifier": None},
+            {"t": "move", "frm": 1, "to": 6, "path": [2, 3, 4, 5, 6]},
+        ]},
+    )})
+    assert scene.animator.is_playing and scene.animator.mover == "p1"
+    # Advance partway through P1's replay (past the roll, into the hops).
+    scene.update(TokenAnimator.ROLL_SECONDS + TokenAnimator.HOP_SECONDS)
+    assert scene.animator.mover == "p1"
+    # P2's turn arrives while P1 is still mid-replay.
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p1", your_turn=True,
+        last_turn={"seq": 2, "pid": "p2", "name": "Bob", "steps": [
+            {"t": "roll", "die": 2, "raw": 2, "modifier": None},
+            {"t": "move", "frm": 1, "to": 3, "path": [2, 3]},
+        ]},
+    )})
+    # The in-flight P1 replay is untouched; P2 is queued, not started.
+    assert scene.animator.mover == "p1", "P2's broadcast clobbered P1's in-flight replay"
+    assert scene.animator.progress() is not None or scene.animator.anchor_cell is not None
+    # P1 finishes, then the queued P2 turn takes over, then the board goes idle.
+    run_scene(scene, until=lambda: scene.animator.mover == "p2")
+    run_scene(scene, until=lambda: not scene._busy)
+    assert not scene.animator.is_playing and not scene._pending
+
+
+def test_snaps_past_stale_turns_when_more_than_one_is_queued() -> None:
+    # When the animator falls 2+ turns behind, the backlog snaps: only the NEWEST
+    # queued turn is replayed (the others' results already show via players[*].pos),
+    # so the board never drifts seconds behind the live game (the user's call).
+    rec = _CueLog()
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    scene.animator = TokenAnimator(rec)   # capture which queued turns truly replay
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p2", your_turn=False,
+        last_turn={"seq": 1, "pid": "p1", "name": "Alice", "steps": [
+            {"t": "move", "frm": 1, "to": 7, "path": [2, 3, 4, 5, 6, 7]},
+        ]},
+    )})
+    assert scene.animator.mover == "p1"
+    scene.update(TokenAnimator.HOP_SECONDS)        # just into P1's long replay
+    # Two more turns pile up: seq 2 carries a SNAKE, seq 3 a LADDER (distinct cues).
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p1", your_turn=True,
+        last_turn={"seq": 2, "pid": "p2", "name": "Bob", "steps": [
+            {"t": "move", "frm": 1, "to": 5, "path": [5]},
+            {"t": "snake", "frm": 5, "to": 1},
+        ]},
+    )})
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p2", your_turn=False,
+        last_turn={"seq": 3, "pid": "p1", "name": "Alice", "steps": [
+            {"t": "move", "frm": 7, "to": 8, "path": [8]},
+            {"t": "ladder", "frm": 8, "to": 28},
+        ]},
+    )})
+    assert len(scene._pending) == 2 and scene.animator.mover == "p1"
+    run_scene(scene, until=lambda: not scene._busy)
+    assert "ladder" in rec.played      # the newest queued turn replayed
+    assert "snake" not in rec.played   # the stale middle turn was snapped past
+
+
+def test_a_queued_turns_banner_fires_at_its_start_not_at_ingest() -> None:
+    # The fix moved the cutscene announce from ingest to the turn's animation START.
+    # A turn that arrives while a prior replay is in flight must not flash its banner
+    # early — it shows only when its own replay begins.
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p2", your_turn=False,
+        last_turn={"seq": 1, "pid": "p1", "name": "Alice", "steps": [
+            {"t": "move", "frm": 1, "to": 6, "path": [2, 3, 4, 5, 6]},
+        ]},
+    )})
+    scene.update(TokenAnimator.HOP_SECONDS)
+    # P2's turn (which SKIPPED Alice) arrives mid-replay -> it queues.
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p1", your_turn=True,
+        last_turn={"seq": 2, "pid": "p2", "name": "Bob", "steps": [
+            {"t": "move", "frm": 1, "to": 3, "path": [2, 3]},
+            {"t": "skipped", "pid": "p1", "name": "Alice"},
+        ]},
+    )})
+    assert scene.cutscene.kind != "skip"        # not flashed early, at ingest
+    # Once P1 finishes and P2's queued replay begins, the banner fires.
+    run_scene(scene, until=lambda: scene.animator.mover == "p2")
+    assert scene.cutscene.kind == "skip" and scene.cutscene.text == "Alice skipped!"
+
+
+def test_a_queued_turn_keeps_input_locked_before_update_drains_it() -> None:
+    # There is a one-frame window (handle_event runs before update drains) where a
+    # turn has finished but the next queued turn has not yet begun: the queue is
+    # non-empty while the animator is idle. Input must stay locked there so nobody
+    # rolls on a board that is about to move.
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    # P1 takes a one-hop turn; P2's turn arrives while it is still playing -> queued.
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p2", your_turn=False,
+        last_turn={"seq": 1, "pid": "p1", "name": "Alice", "steps": [
+            {"t": "move", "frm": 1, "to": 2, "path": [2]},
+        ]},
+    )})
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p1", your_turn=True,
+        last_turn={"seq": 2, "pid": "p2", "name": "Bob", "steps": [
+            {"t": "move", "frm": 1, "to": 3, "path": [2, 3]},
+        ]},
+    )})
+    # One frame finishes P1's hop but does NOT yet drain P2 (drain runs at the START
+    # of update, before animator.update ends the hop): idle animator, non-empty queue.
+    scene.update(TokenAnimator.HOP_SECONDS + 0.01)
+    assert not scene.animator.is_playing and scene._pending   # the one-frame gap
+    assert scene._busy and not can_roll(scene.gs, scene._busy)
+    scene._roll()
+    assert (protocol.C_ROLL_DICE, {}) not in app.net.sent
+
+
+def test_leaving_the_scene_drops_queued_turns() -> None:
+    # Tearing down the scene must clear the replay queue too, so a stale backlog can
+    # never restart an animation on a torn-down board (the queue parallels the
+    # animator's in-flight state and is reset with it).
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p2", your_turn=False,
+        last_turn={"seq": 1, "pid": "p1", "name": "Alice", "steps": [
+            {"t": "move", "frm": 1, "to": 7, "path": [2, 3, 4, 5, 6, 7]},
+        ]},
+    )})
+    scene.update(TokenAnimator.HOP_SECONDS)            # P1 replaying
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p1", last_turn={"seq": 2, "pid": "p2", "name": "Bob", "steps": [
+            {"t": "move", "frm": 1, "to": 3, "path": [2, 3]},
+        ]},
+    )})
+    assert scene._pending and scene.animator.is_playing   # one queued behind the other
+    scene.on_message({"type": protocol.S_RETURN_TO_LOBBY})
+    from client.scenes.lobby import LobbyScene
+    assert scene._pending == [] and not scene.animator.is_playing
+    assert isinstance(app.scene, LobbyScene)   # the teardown path actually ran
