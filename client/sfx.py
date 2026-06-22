@@ -108,6 +108,9 @@ class Sfx:
         except Exception:  # no audio device / browser restriction -> silent, retry later
             return False
         self._ok = True
+        # Queue in catalog order; pump() drains from the front so "roll" (the first
+        # cue fired every turn) is prewarmed first, not left to play()'s synchronous
+        # lazy synth -- the frame stall pump() exists to spread out.
         self._pending = list(SOUNDS)
         return True
 
@@ -124,7 +127,7 @@ class Sfx:
         first needed is built lazily by :meth:`play` (one small cue, not nine)."""
         if not self._ok or not self._pending:
             return
-        name = self._pending.pop()
+        name = self._pending.pop(0)  # FIFO: catalog order, "roll" first
         if name in self._cache:
             return
         try:

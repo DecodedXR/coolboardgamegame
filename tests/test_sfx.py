@@ -125,6 +125,28 @@ def test_play_builds_a_missing_cue_lazily(monkeypatch) -> None:
     assert len(built) == 1
 
 
+def test_pump_prewarms_cues_in_catalog_order_roll_first(monkeypatch) -> None:
+    # The first cue fired every turn is "roll" (the dice). pump() drains the queue
+    # with list.pop() (from the END), so init() must queue the cues REVERSED for the
+    # pops to come out in catalog order -- building "roll" FIRST. Otherwise roll is
+    # built last and routinely misses the prewarm, falling back to play()'s
+    # synchronous lazy synth (the very frame-freeze that pump() exists to avoid).
+    class FakeSound:
+        def play(self) -> None:
+            pass
+
+    monkeypatch.setattr(pygame.mixer, "init", lambda *a, **k: None)
+    monkeypatch.setattr(pygame.mixer, "Sound", lambda *a, **k: FakeSound())
+    s = sfx.Sfx()
+    assert s.init() is True
+    s.pump()
+    # _cache preserves insertion order, so its keys ARE the prewarm order so far.
+    assert list(s._cache) == ["roll"]            # the very first cue built is roll
+    for _ in range(len(sfx.SOUNDS)):
+        s.pump()
+    assert list(s._cache) == list(sfx.SOUNDS)    # full prewarm follows catalog order
+
+
 def test_every_animation_sound_has_a_spec() -> None:
     for name in ("roll", "hop", "snake", "ladder", "wheel", "gold", "debuff", "buy", "win"):
         assert name in sfx.SOUNDS
