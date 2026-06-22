@@ -618,3 +618,176 @@ def test_leaving_the_scene_clears_the_wheel_overlay() -> None:
     assert scene.wheel.is_visible
     scene.on_message({"type": protocol.S_RETURN_TO_LOBBY})
     assert not scene.wheel.is_visible
+
+
+# --- item buttons (the powerup row rebuilt per frame from the hand) --------
+#
+# usable_items() (the data) is pinned above; these pin _sync_item_buttons() (the
+# widgets it builds from that data) -- the per-frame rebuild that the scene's
+# update() runs and handle_event() forwards clicks to. None of it touches a
+# Surface, so it runs headless: we set a game_state, sync, and assert on the
+# button list (names, callbacks, layout) and the message a click would send.
+
+from client.shop_ui import item_label   # noqa: E402  (grouped with its tests)
+
+
+def _my_turn_holding(*items: str) -> tuple[FakeApp, SnakesAndLaddersScene]:
+    """A scene parked on our own pre-roll turn, holding the given powerups."""
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    gs = _gs()
+    gs["players"][0]["items"] = list(items)
+    app.gamestate = gs
+    return app, scene
+
+
+def test_item_buttons_build_one_per_held_powerup_in_order() -> None:
+    _app, scene = _my_turn_holding("boost", "immunity", "double")
+    scene._sync_item_buttons()
+    assert [name for name, _ in scene._item_buttons] == ["boost", "immunity", "double"]
+    # Each carries its friendly catalog label, not the raw item key.
+    assert [btn.label for _, btn in scene._item_buttons] == [
+        item_label("boost"), item_label("immunity"), item_label("double")
+    ]
+
+
+def test_each_item_button_arms_its_own_powerup() -> None:
+    # The classic late-binding trap: a `lambda: self._use(item)` would make EVERY
+    # button arm the last item. The `it=item` capture must bind per button, so
+    # firing button i sends C_USE_POWERUP for item i -- not the last one.
+    app, scene = _my_turn_holding("boost", "immunity", "double")
+    scene._sync_item_buttons()
+    for name, btn in scene._item_buttons:
+        app.net.sent.clear()
+        btn.on_click()
+        assert app.net.sent == [(protocol.C_USE_POWERUP, {"item": name})]
+
+
+def test_clicking_an_item_button_arms_that_powerup_through_handle_event() -> None:
+    # The full input path: update() builds the row, then a real MOUSEBUTTONDOWN at
+    # the second button's center routes through handle_event's item-button loop and
+    # arms exactly that powerup.
+    app, scene = _my_turn_holding("boost", "immunity")
+    scene.update(0.0)
+    target_name, target_btn = scene._item_buttons[1]
+    assert target_name == "immunity"
+    cx, cy = target_btn.rect.center
+    scene.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(cx, cy)))
+    assert (protocol.C_USE_POWERUP, {"item": "immunity"}) in app.net.sent
+
+
+def test_no_item_buttons_off_turn_or_while_shopping() -> None:
+    app = FakeApp()
+    scene = SnakesAndLaddersScene(app)
+    scene.on_enter()
+    # Holding powerups, but it isn't our roll-turn -> no row.
+    not_my_turn = _gs(your_turn=False)
+    not_my_turn["players"][0]["items"] = ["boost"]
+    app.gamestate = not_my_turn
+    scene._sync_item_buttons()
+    assert scene._item_buttons == []
+    # Our turn but in the shop sub-state -> still no arming row.
+    shopping = _gs(awaiting="shop")
+    shopping["players"][0]["items"] = ["boost"]
+    app.gamestate = shopping
+    scene._sync_item_buttons()
+    assert scene._item_buttons == []
+
+
+def test_no_item_buttons_while_the_board_is_busy() -> None:
+    # Arming is locked while a replay is in flight or a turn is still queued, so the
+    # row must clear even though we hold the items and it is our pre-roll turn.
+    _app, scene = _my_turn_holding("boost", "immunity")
+    scene._sync_item_buttons()
+    assert [name for name, _ in scene._item_buttons] == ["boost", "immunity"]
+    scene._pending.append({"last_turn": None, "current_pid": "p1", "winner": False})
+    assert scene._busy
+    scene._sync_item_buttons()
+    assert scene._item_buttons == []
+
+
+def test_item_row_is_not_rebuilt_until_the_hand_changes() -> None:
+    # An unchanged hand keeps the SAME button objects across frames (so hover state
+    # and the like survive); a changed hand rebuilds fresh.
+    _app, scene = _my_turn_holding("boost", "immunity")
+    scene._sync_item_buttons()
+    first_row = scene._item_buttons
+    first_btn = first_row[0][1]
+    scene._sync_item_buttons()
+    assert scene._item_buttons is first_row          # not rebuilt
+    assert scene._item_buttons[0][1] is first_btn
+    # Acquire a third powerup -> the row is rebuilt with new buttons.
+    scene.gs["players"][0]["items"] = ["boost", "immunity", "double"]
+    scene._sync_item_buttons()
+    assert [name for name, _ in scene._item_buttons] == ["boost", "immunity", "double"]
+    assert scene._item_buttons[0][1] is not first_btn
+
+
+def test_item_button_row_is_horizontally_centered() -> None:
+    _app, scene = _my_turn_holding("boost", "immunity", "double")
+    scene._sync_item_buttons()
+    left_margin = scene._item_buttons[0][1].rect.x
+    right_margin = scene.app.width - scene._item_buttons[-1][1].rect.right
+    assert abs(left_margin - right_margin) <= 1      # centered (tolerate int rounding)
+    # Laid left-to-right without overlap.
+    xs = [btn.rect.x for _, btn in scene._item_buttons]
+    assert xs == sorted(xs)
+    for (_, a), (_, b) in zip(scene._item_buttons, scene._item_buttons[1:]):
+        assert b.rect.x >= a.rect.right
+    # A realistic hand (<=4 distinct powerups) fits on the canvas. NB: a hand of 5+
+    # items overflows the row off-canvas (centered but unconstrained) -- a known
+    # cosmetic follow-up that needs a UX call on laying many buttons out, so it is
+    # deliberately left unpinned here rather than asserted either way.
+    assert all(0 <= btn.rect.x and btn.rect.right <= scene.app.width
+               for _, btn in scene._item_buttons)
+
+
+def test_duplicate_held_items_each_get_their_own_button() -> None:
+    # The server can hand a player two of the same powerup (e.g. buy a second
+    # boost), so the row builds one independently-wired button per copy rather than
+    # collapsing them, and each still arms that powerup.
+    app, scene = _my_turn_holding("boost", "boost", "immunity")
+    scene._sync_item_buttons()
+    assert [name for name, _ in scene._item_buttons] == ["boost", "boost", "immunity"]
+    fired = []
+    for _name, btn in scene._item_buttons:
+        app.net.sent.clear()
+        btn.on_click()
+        fired.append(app.net.sent[0])
+    assert fired == [
+        (protocol.C_USE_POWERUP, {"item": "boost"}),
+        (protocol.C_USE_POWERUP, {"item": "boost"}),
+        (protocol.C_USE_POWERUP, {"item": "immunity"}),
+    ]
+
+
+def test_item_buttons_stay_hidden_through_a_real_replay_then_reappear() -> None:
+    # _busy has two causes; the test above pins the _pending-queue one, this pins the
+    # animator actually playing. A broadcast that makes it our pre-roll turn but
+    # carries a bot's last_turn to replay must keep the arming row hidden for the
+    # whole replay (update() re-syncs every frame), then show it once the board idles.
+    _app, scene = _my_turn_holding("boost")
+    scene.on_message({"type": protocol.S_GAME_STATE, "game": _gs(
+        current_pid="p1", your_turn=True,
+        last_turn={"seq": 1, "pid": "p2", "name": "Bob", "steps": [
+            {"t": "move", "frm": 1, "to": 5, "path": [2, 3, 4, 5]},
+        ]},
+        players=[
+            {"id": "p1", "name": "Alice", "pos": 1, "gold": 100, "items": ["boost"],
+             "is_bot": False, "finished": False},
+            {"id": "p2", "name": "Bob", "pos": 5, "gold": 100, "items": [],
+             "is_bot": True, "finished": False},
+        ],
+    )})
+    assert scene.animator.is_playing and scene._busy
+    saw_busy_frame = False
+    for _ in range(500):
+        if not scene._busy:
+            break
+        saw_busy_frame = True
+        assert scene._item_buttons == []      # hidden for every in-flight replay frame
+        scene.update(0.05)
+    assert saw_busy_frame and not scene._busy, "the replay never finished"
+    scene.update(0.0)                          # idle board: our pre-roll turn, boost in hand
+    assert [name for name, _ in scene._item_buttons] == ["boost"]
