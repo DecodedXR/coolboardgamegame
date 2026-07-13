@@ -1,21 +1,21 @@
 # coolboardgamegame
 
-An online-multiplayer party-game platform in the spirit of **Magic the Noah** —
+An online-multiplayer party-game platform in the spirit of **Magic the Noah** -
 scuffed homebrew gameshows (word games, trivia, board games) run by a host for a
 handful of contestants. Built with **pygame** clients talking to a small
 **websockets** server.
 
 Think *"Jackbox meets a Discord gameshow."* One player can be the **host** (reveals
 prompts, judges, torments contestants) or the room can run **host-less / automated**
-— it's a per-room toggle.
+- it's a per-room toggle.
 
 ## Status
 
-- **Milestone 1 — networking plumbing ✅** The multiplayer spine: lobby, rooms,
+- **Milestone 1 - networking plumbing ✅** The multiplayer spine: lobby, rooms,
   live state broadcast, ready-up, the human/auto **host toggle**, **host handoff**,
   and graceful disconnect with a grace period.
-- **Milestone 2 — networked Snakes & Ladders ✅** A turn-based, server-authoritative
-  board game plugged in behind `start_game` — and **snake-heavy**, so winning is
+- **Milestone 2 - networked Snakes & Ladders ✅** A turn-based, server-authoritative
+  board game plugged in behind `start_game` - and **snake-heavy**, so winning is
   brutal. Roll the dice to move; landing on a special tile spins a Wheel-of-Names
   for a powerup / debuff / gold outcome, opens a shop, grants gold, or drops a
   debuff on you. A gold economy and held powerups (immunity / boost / double /
@@ -25,35 +25,35 @@ prompts, judges, torments contestants) or the room can run **host-less / automat
   (per-turn countdown timers). The server resolves each turn into an ordered
   timeline that clients replay as animation (token hops, snake slides, wheel
   spins, cutscenes, procedural SFX).
-- **Milestone 3 — true online (cloud-hosted) ✅** The server is deployed on
+- **Milestone 3 - true online (cloud-hosted) ✅** The server is deployed on
   **Render** (free tier) at `wss://coolboardgamegame.onrender.com` and is the
-  client's baked-in default — nobody runs a server or a tunnel. Joining is now
+  client's baked-in default - nobody runs a server or a tunnel. Joining is now
   just: launch the client → type a name → enter the room code. (A sleeping
   free instance takes ~30–60s to wake on the first connect; the client shows a
   "waking the server…" status and retries.)
-- **Tier 4 — browser/WASM client ✅** The pygame client compiles to WebAssembly
-  via **pygbag** and is hosted on **GitHub Pages** — opening a link is enough to
+- **Tier 4 - browser/WASM client ✅** The pygame client compiles to WebAssembly
+  via **pygbag** and is hosted on **GitHub Pages** - opening a link is enough to
   play, no Python or install required.
 
 ```
 shared/protocol.py    wire format (message types + JSON encode/decode), shared by both sides
 server/               authoritative websockets server (rooms, host logic, broadcasting)
-server/games/         pluggable minigames — snakes_and_ladders.py (pure rules + turn timeline)
+server/games/         pluggable minigames - snakes_and_ladders.py (pure rules + turn timeline)
 client/               pygame client (net thread + scenes: connect / menu / lobby / snakes_and_ladders)
-client/board_render.py, token_anim.py, wheel.py, shop_ui.py, cutscene.py, sfx.py  — board components
+client/board_render.py, token_anim.py, wheel.py, shop_ui.py, cutscene.py, sfx.py  - board components
 config.py             HOST/PORT, room sizing, and Snakes & Ladders tuning (board, tiles, economy, timers)
-tests/                headless tests — test_server.py (end-to-end) + test_snakes_and_ladders.py (rules)
+tests/                headless tests - test_server.py (end-to-end) + test_snakes_and_ladders.py (rules)
 ```
 
 ## Play in your browser
 
-Open **https://decodedxr.github.io/coolboardgamegame** in any modern browser — no
+Open **https://decodedxr.github.io/coolboardgamegame** in any modern browser - no
 Python, no install. The page connects to the cloud server; share a room code and
 play.
 
-- **Mobile** — hold your phone portrait (upright). The layout fills the screen and
+- **Mobile** - hold your phone portrait (upright). The layout fills the screen and
   text entry (name, room code, answers) uses the browser's native prompt dialog.
-- **Desktop** — the browser client works fine; the `python -m client` desktop build
+- **Desktop** - the browser client works fine; the `python -m client` desktop build
   is unchanged if you prefer it.
 
 > The very first connect of the day wakes Render's free tier (~30–60 s); the client
@@ -63,9 +63,9 @@ play.
 
 One player starts the game from the lobby (the **host** in human mode, the
 **owner** in auto mode), optionally seating a few **bots** with the `- bots N +`
-stepper to fill out the board — you need at least two players total (humans + bots).
+stepper to fill out the board - you need at least two players total (humans + bots).
 On your turn, click **ROLL** to move along the serpentine board. Land on a snake
-and you slide *down* (there are far more snakes than ladders — winning is meant to
+and you slide *down* (there are far more snakes than ladders - winning is meant to
 hurt); land on a special tile to spin a wheel for a random outcome, gain gold, take
 a debuff, or open a **shop** to buy a powerup. Powerups you hold (immunity / boost /
 double / reroll) can be armed *before* you roll. Reach the final cell exactly to win
@@ -77,7 +77,7 @@ play again.
 ## Setup
 
 Requires Python 3.10+. On Python 3.14 use `pygame-ce` (a drop-in for `pygame`
-with up-to-date wheels — it still imports as `pygame`); `requirements.txt` already
+with up-to-date wheels - it still imports as `pygame`); `requirements.txt` already
 pins it.
 
 ```bash
@@ -114,7 +114,7 @@ python -m pip install -r requirements.txt
 ## Cloud (live)
 
 The server is hosted on **Render** at `wss://coolboardgamegame.onrender.com` and is
-the client's default — to play online you don't run anything server-side, just
+the client's default - to play online you don't run anything server-side, just
 launch the client and join a code. The deploy is config-only (`render.yaml` +
 `Dockerfile`): the server reads `HOST`/`PORT` from the environment and binds
 `0.0.0.0`, so the identical `python -m server` runs on LAN and on any host that
