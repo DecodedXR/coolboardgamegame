@@ -41,10 +41,12 @@ _BOT_POOL_CAP = 200   # per-prompt candidate words kept for bots
 
 
 def derive_prompts(words, min_count, pool_cap=_BOT_POOL_CAP):
-    """Scan every word's 2- and 3-letter substrings. Return ``(prompts, index)``:
+    """Scan every word's 2- and 3-letter substrings. Return ``(prompts, index,
+    counts)``:
 
     ``prompts`` = sorted list of substrings appearing in >= ``min_count`` words;
-    ``index`` = ``{prompt: first pool_cap words containing it}`` for bot answers.
+    ``index`` = ``{prompt: first pool_cap words containing it}`` for bot answers;
+    ``counts`` = ``{prompt: total words containing it}`` (surviving prompts only).
     Each substring is counted at most once per word (a per-word set), so a word
     like ``"banana"`` doesn't triple-count ``"an"``.
     """
@@ -67,7 +69,8 @@ def derive_prompts(words, min_count, pool_cap=_BOT_POOL_CAP):
                 bucket.append(w)
     prompts = sorted(sub for sub, c in counts.items() if c >= min_count)
     index = {sub: index[sub] for sub in prompts}
-    return prompts, index
+    surviving_counts = {sub: counts[sub] for sub in prompts}
+    return prompts, index, surviving_counts
 
 
 @lru_cache(maxsize=1)
@@ -75,19 +78,20 @@ def load_dictionary(min_count: int = 500):
     """Read ``words.txt`` and derive the prompt table once per process.
 
     Returns ``(words: frozenset[str], prompts: list[str], index: dict[str,
-    list[str]])``. ``lru_cache`` amortizes the one-time substring scan (the driver
-    warms it at boot). Lines are read with ``.strip()`` — a Windows checkout with
-    autocrlf can hand the file over with ``\\r\\n``, and a dictionary of ``'cat\\r'``
-    entries would reject every word ever typed.
+    list[str]], counts: dict[str, int])``. ``lru_cache`` amortizes the one-time
+    substring scan (the driver warms it at boot). Lines are read with ``.strip()``
+    — a Windows checkout with autocrlf can hand the file over with ``\\r\\n``, and a
+    dictionary of ``'cat\\r'`` entries would reject every word ever typed.
     """
     raw = _WORDS_PATH.read_text(encoding="utf-8")
     words = frozenset(w for w in (line.strip() for line in raw.splitlines()) if w)
-    prompts, index = derive_prompts(words, min_count)
-    return words, prompts, index
+    prompts, index, counts = derive_prompts(words, min_count)
+    return words, prompts, index, counts
 
 
 class WordBombGame:
     def __init__(self, contestants, *, bots=(), words, prompts, index=None,
+                 counts=None, fuse_start=20.0, fuse_step=0.5, fuse_floor=7.0,
                  lives=2, bot_fail_chance=0.25, rng=None) -> None:
         contestants = list(contestants)
         bots = list(bots)
@@ -100,6 +104,11 @@ class WordBombGame:
         self.words = words
         self.prompts = prompts
         self.index = index or {}
+        self.counts = counts or {}
+        self.fuse_start = fuse_start
+        self.fuse_step = fuse_step
+        self.fuse_floor = fuse_floor
+        self.fuse_seconds = fuse_start
         self.bot_fail_chance = bot_fail_chance
 
         self.lives: dict[str, int] = {pid: lives for pid in self.order}
@@ -113,6 +122,12 @@ class WordBombGame:
         self.feed: list[dict] = []   # event log; only the last 8 kept
         self._event_id = 0
         self.prompt = self.rng.choice(prompts)
+        self.options = 0
+        self._count_options()
+
+    def _count_options(self) -> None:
+        base = self.counts.get(self.prompt, 0)
+        self.options = max(0, base - sum(1 for w in self.used if self.prompt in w))
 
     # --- contract methods used by the connection layer --------------------
 
@@ -178,6 +193,7 @@ class WordBombGame:
         self.used.add(w)
         self._emit(kind="accept", pid=pid, name=name, word=w, prompt=self.prompt)
         self.seq += 1
+        self.fuse_seconds = max(self.fuse_floor, self.fuse_seconds - self.fuse_step)
         self._pass_bomb()
         return "accepted"
 
@@ -193,6 +209,7 @@ class WordBombGame:
         if self.lives[pid] <= 0:
             self._emit(kind="eliminated", pid=pid, name=self.names[pid])
         self.seq += 1
+        self.fuse_seconds = self.fuse_start
         if len(self.alive_ids()) == 1:
             self.phase = PHASE_GAMEOVER
             self.winner_id = self.alive_ids()[0]
@@ -211,6 +228,7 @@ class WordBombGame:
                 break
         self.current_idx = idx
         self.prompt = self.rng.choice(self.prompts)
+        self._count_options()
 
     def bot_action(self, pid: str) -> dict[str, Any]:
         """Pure: what a trivial bot would do now. Fumbles at ``bot_fail_chance``
@@ -254,4 +272,5 @@ class WordBombGame:
             "feed": list(self.feed),
             "winner": self.winner,
             "used_count": len(self.used),
+            "options": self.options,
         }

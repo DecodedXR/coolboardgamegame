@@ -95,7 +95,11 @@ the fuse burns down. A valid, unused word passes the bomb to the next player wit
 fresh prompt; a word that is not real, does not contain the prompt, or was already
 used is bounced (the fuse keeps burning - it does not reset). If the fuse runs out
 the bomb explodes and you lose a life; at 0 lives you are eliminated, and the last
-player standing wins. In **auto** mode the fuse is a per-turn countdown and bots
+player standing wins. In **auto** mode the fuse is a per-turn countdown that
+starts at 20s and tightens by half a second every solved word (floor 7s); an
+explosion resets it to 20s, so the game speeds up the longer everyone survives.
+A live count under the prompt shows how many valid words are still left for it
+(shrinking as words get used up). Bots
 take their own turns; in **human** mode the host holds the detonator and clicks
 **DETONATE** to blow the current player's turn. Bots fill empty seats just like in
 Snakes & Ladders.

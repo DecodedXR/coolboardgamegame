@@ -37,7 +37,7 @@ async def main() -> None:
     # nothing is connected yet, so blocking here is free.
     from config import WB_MIN_WORDS_PER_PROMPT
     from server.games.word_bomb import load_dictionary
-    words, prompts, _ = load_dictionary(WB_MIN_WORDS_PER_PROMPT)
+    words, prompts, _, _ = load_dictionary(WB_MIN_WORDS_PER_PROMPT)
     print(f"word bomb dictionary ready: {len(words)} words, {len(prompts)} prompts")
 
     game = GameServer()

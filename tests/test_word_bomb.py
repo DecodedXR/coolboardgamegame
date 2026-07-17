@@ -131,14 +131,66 @@ def test_bot_action_plays_a_word_or_fumbles_by_chance() -> None:
     assert g2.bot_action("p2") == {"kind": "pass"}
 
 
+# --- fuse curve + options -------------------------------------------------
+
+def test_fuse_shortens_half_a_second_per_accepted_word() -> None:
+    g = _game()
+    g.prompt = "ca"
+    assert g.fuse_seconds == 20.0                 # fresh bomb
+    g.submit_word("p1", "cat")
+    assert g.fuse_seconds == 19.5                 # one accept shaves 0.5
+
+
+def test_fuse_never_drops_below_the_floor() -> None:
+    g = _game(fuse_start=7.5, fuse_floor=7.0)
+    g.prompt = "ca"
+    g.submit_word("p1", "cat")
+    assert g.fuse_seconds == 7.0                  # 7.5 - 0.5 = 7.0
+    g.prompt = "ca"
+    g.submit_word("p2", "catalog")
+    assert g.fuse_seconds == 7.0                  # clamped, never below
+
+
+def test_explosion_resets_the_fuse() -> None:
+    g = _game()
+    g.prompt = "ca"
+    g.submit_word("p1", "cat")
+    g.prompt = "co"
+    g.submit_word("p2", "cot")
+    assert g.fuse_seconds < 20.0                  # tightened by the accepts
+    g.advance()                                   # the bomb explodes
+    assert g.fuse_seconds == 20.0                 # reset to fuse_start
+
+
+def test_rejects_do_not_change_the_fuse() -> None:
+    g = _game()
+    g.prompt = "ca"
+    before = g.fuse_seconds
+    g.submit_word("p1", "dog")                    # not_in_prompt
+    g.submit_word("p1", "caz")                    # not_a_word
+    assert g.fuse_seconds == before               # only accepts tighten
+
+
+def test_options_counts_remaining_words_and_reaches_public() -> None:
+    g = _game(prompts=["ca"], words={"cat", "cap", "car", "dog"},
+              index={"ca": ["cat", "cap", "car"]}, counts={"ca": 3})
+    assert g.prompt == "ca" and g.options == 3    # single-prompt game pins "ca"
+    assert g.public("p1", None)["options"] == 3
+    g.submit_word("p1", "cat")                    # accept re-picks "ca"
+    assert g.prompt == "ca" and g.options == 2    # one used "ca"-word drops it
+    assert g.public("p2", None)["options"] == 2
+
+
 def test_derive_prompts_keeps_only_frequent_substrings() -> None:
-    prompts, index = derive_prompts({"cat", "catalog", "cot"}, min_count=2)
+    prompts, index, counts = derive_prompts({"cat", "catalog", "cot"}, min_count=2)
     words = ["cat", "catalog", "cot"]
     assert "at" in prompts and "ca" in prompts     # each in >= 2 words
     assert "log" not in prompts                    # only in "catalog"
     for p in prompts:
         assert sum(1 for w in words if p in w) >= 2
         assert p in index and index[p]             # every prompt has bot candidates
+        assert counts[p] == sum(1 for w in words if p in w)   # counts track survivors
+    assert set(counts) == set(prompts)             # counts filtered to surviving prompts
 
 
 def test_dictionary_asset_is_present_and_clean() -> None:
@@ -159,9 +211,13 @@ DRIVER_INDEX = {"ca": ["cat", "catalog", "cab", "cap"],
                 "co": ["cot", "coat", "cog", "con"]}
 
 
+DRIVER_COUNTS = {p: sum(1 for w in DRIVER_WORDS if p in w) for p in DRIVER_PROMPTS}
+
+
 def _toy_load(*_a, **_k):
     """Stand-in for load_dictionary: a tiny, deterministic word set."""
-    return DRIVER_WORDS, list(DRIVER_PROMPTS), {k: list(v) for k, v in DRIVER_INDEX.items()}
+    return (DRIVER_WORDS, list(DRIVER_PROMPTS),
+            {k: list(v) for k, v in DRIVER_INDEX.items()}, dict(DRIVER_COUNTS))
 
 
 async def _wb_room(server, conns, names, monkeypatch, *, host_mode=protocol.HOST_AUTO,
@@ -217,6 +273,29 @@ async def test_word_bomb_valid_submit_passes_the_bomb(monkeypatch) -> None:
     assert g["current_pid"] != cur         # the bomb passed on
     assert g["used_count"] == 1
     assert g["feed"][-1]["kind"] == "accept"
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)
+    await a.drop(); await b.drop()
+
+
+async def test_word_bomb_deadline_follows_the_fuse_curve(monkeypatch) -> None:
+    # After an accepted word the driver re-arms the deadline off the tightened fuse
+    # (20.0 -> 19.5), so the remaining time drops by ~0.5s.
+    import time
+    server = GameServer()
+    a, ta = await open_conn(server)
+    b, tb = await open_conn(server)
+    await _wb_room(server, [a, b], ["A", "B"], monkeypatch)
+
+    remaining_before = a.game()["deadline"] - time.time()
+    assert abs(remaining_before - 20.0) < 1.0     # fresh bomb ~ fuse_start
+
+    cur = a.game()["current_pid"]
+    cur_conn = _conn_for([a, b], cur)
+    await cur_conn.push(protocol.C_SUBMIT_WORD, word=_valid_word(a.game()["prompt"], set()))
+
+    remaining_after = a.game()["deadline"] - time.time()
+    assert abs(remaining_after - 19.5) < 1.0      # one accept -> fuse 19.5
 
     await a.push(protocol.C_RETURN_TO_LOBBY)
     await a.drop(); await b.drop()

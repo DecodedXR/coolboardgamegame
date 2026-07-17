@@ -51,7 +51,9 @@ from config import (
     SAL_SHOP_SECONDS,
     SAL_BOT_DELAY_SECONDS,
     WB_LIVES,
-    WB_TURN_SECONDS,
+    WB_FUSE_START,
+    WB_FUSE_STEP,
+    WB_FUSE_FLOOR,
     WB_MIN_WORDS_PER_PROMPT,
     WB_BOT_FAIL_CHANCE,
     WB_BOT_DELAY_SECONDS,
@@ -275,9 +277,11 @@ class GameServer:
             await self._send_error(ctx.conn, protocol.ERR_BAD_MESSAGE, f"unknown game {game_name!r}")
             return
         if game_name == protocol.GAME_WORD_BOMB:
-            words, prompts, index = load_dictionary(WB_MIN_WORDS_PER_PROMPT)
+            words, prompts, index, counts = load_dictionary(WB_MIN_WORDS_PER_PROMPT)
             game = WordBombGame(contestants, bots=bots, words=words, prompts=prompts,
-                                index=index, lives=WB_LIVES,
+                                index=index, counts=counts, fuse_start=WB_FUSE_START,
+                                fuse_step=WB_FUSE_STEP, fuse_floor=WB_FUSE_FLOOR,
+                                lives=WB_LIVES,
                                 bot_fail_chance=WB_BOT_FAIL_CHANCE, rng=self._make_rng())
         else:
             game = SnakesAndLaddersGame(
@@ -483,7 +487,7 @@ class GameServer:
             game.deadline = None
             self._phase_tasks[code] = asyncio.ensure_future(self._auto_turn(code, cur, seq))
         elif room.host_mode == protocol.HOST_AUTO:
-            seconds = WB_TURN_SECONDS if isinstance(game, WordBombGame) else (SAL_SHOP_SECONDS if game.awaiting == AWAIT_SHOP else SAL_ROLL_SECONDS)
+            seconds = game.fuse_seconds if isinstance(game, WordBombGame) else (SAL_SHOP_SECONDS if game.awaiting == AWAIT_SHOP else SAL_ROLL_SECONDS)
             game.deadline = time.time() + seconds
             self._phase_tasks[code] = asyncio.ensure_future(self._turn_deadline(code, seconds, cur, seq))
         else:  # human host: park until the host advances (or the human acts)

@@ -119,6 +119,13 @@ def feed_line(event: dict) -> str:
     return ""
 
 
+def fmt_options(n: int) -> str:
+    """804 -> '804 words', 19983 -> '20k words'."""
+    if n >= 10_000:
+        return f"{round(n / 1000)}k words"
+    return f"{n} words"
+
+
 def tail_that_fits(text: str, max_w: int, measure) -> str:
     """Longest tail of ``text`` whose ``measure(tail)`` fits ``max_w`` — long
     words keep the end (where the typing happens) on screen."""
@@ -441,6 +448,8 @@ class WordBombScene(Scene):
         self._draw_bomb(surf, press, rim, ox, oy, now)
         self._draw_countdown(surf, frac, rim, remaining, deadline)
         self._draw_prompt_tiles(surf, gs.get("prompt", ""), heat, press, ox, oy, now)
+        if gs.get("phase") == protocol.PHASE_PLAY and gs.get("options") is not None:
+            ui.Label(fmt_options(gs.get("options", 0)), (240, 196 + oy), 14, ui.MUTED, center=True).draw(surf)
         if gs.get("phase") == protocol.PHASE_PLAY:
             self._draw_typed(surf, gs, now, ox, oy)
         self._draw_players(surf, gs, heat, ox, oy)

@@ -25,6 +25,7 @@ from client.scenes.word_bomb import (
     SHAKE_TIME,
     FLASH_TIME,
     feed_line,
+    fmt_options,
     fuse_points,
     heat_color,
     press_of,
@@ -142,6 +143,14 @@ def test_seat_positions_on_canvas_seat0_topmost() -> None:
         for x, y in pts:
             assert 0 <= x <= 480 and 0 <= y <= 800
         assert min(pts, key=lambda p: p[1]) == pts[0]   # seat 0 is the topmost
+
+
+def test_fmt_options_switches_to_k_at_ten_thousand() -> None:
+    assert fmt_options(0) == "0 words"
+    assert fmt_options(804) == "804 words"
+    assert fmt_options(9999) == "9999 words"
+    assert fmt_options(10000) == "10k words"
+    assert fmt_options(19983) == "20k words"
 
 
 def test_feed_line_formats_every_kind_in_ascii() -> None:
