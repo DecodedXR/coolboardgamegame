@@ -17,7 +17,7 @@ from __future__ import annotations
 import array
 import io
 import math
-import wave
+import struct
 from typing import Iterable
 
 import pygame
@@ -99,13 +99,16 @@ def _render_wav(segments: Iterable[Segment], sample_rate: int = _SAMPLE_RATE) ->
             env = min(1.0, (i + 1) / fade_n, (n - i) / fade_n)
             samples.append(int(value * env * _AMPLITUDE * _MAX_INT16))
 
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)  # 16-bit
-        wav.setframerate(sample_rate)
-        wav.writeframes(samples.tobytes())
-    return buf.getvalue()
+    # Hand-rolled 44-byte RIFF/WAVE header (PCM, mono, 16-bit): pygbag's WASM
+    # CPython ships without the `wave` module, and this is all wave.open() wrote.
+    pcm = samples.tobytes()
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", 36 + len(pcm), b"WAVE",
+        b"fmt ", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16,
+        b"data", len(pcm),
+    )
+    return header + pcm
 
 
 class Sfx:
