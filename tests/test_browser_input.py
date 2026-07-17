@@ -66,6 +66,16 @@ def test_browser_prompt_respects_upper_and_max_len(browser):
     assert field.text == "ABCD"
 
 
+def test_browser_keydown_types_when_focused(browser):
+    # A desktop browser has a real keyboard: key events must edit the field
+    # directly (the tap-prompt is the touch fallback, not the only path).
+    field = ui.TextInput((10, 10, 100, 40))
+    field.focused = True  # the word bomb scene auto-focuses on your turn
+    field.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a, unicode="a"))
+    assert field.text == "a"
+    assert browser.calls == []  # typing never opens the prompt
+
+
 def test_desktop_keydown_still_edits_and_skips_prompt(monkeypatch):
     sentinel = []
     monkeypatch.setattr(browser_io, "is_browser", lambda: False)

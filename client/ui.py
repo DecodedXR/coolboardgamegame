@@ -99,17 +99,18 @@ class TextInput:
         self.focused = False
 
     def handle(self, event: pygame.event.Event) -> None:
-        if browser_io.is_browser():
-            # The phone soft keyboard can't focus the canvas, so key events never
-            # arrive. Tapping the field opens the browser's native prompt instead.
-            if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
-                    and self.rect.collidepoint(event.pos)):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if browser_io.is_browser() and self.rect.collidepoint(event.pos):
+                # Phone soft keyboards can't focus the canvas, so tapping the field
+                # opens the browser's native prompt instead. Key events still fall
+                # through below: a desktop browser's physical keyboard types
+                # directly (the prompt is the touch fallback, not the only path).
                 value = browser_io.prompt(self.placeholder or "enter text", self.text)
                 if self.upper:
                     value = value.upper()
                 self.text = value[: self.max_len]
-            return
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self.focused = True
+                return
             self.focused = self.rect.collidepoint(event.pos)
         elif event.type == pygame.KEYDOWN and self.focused:
             if event.key == pygame.K_BACKSPACE:
