@@ -50,6 +50,10 @@ from config import (
     SAL_ROLL_SECONDS,
     SAL_SHOP_SECONDS,
     SAL_BOT_DELAY_SECONDS,
+    WB_LIVES,
+    WB_TURN_SECONDS,
+    WB_MIN_WORDS_PER_PROMPT,
+    WB_BOT_FAIL_CHANCE,
 )
 from server.rooms import Room, RoomManager
 from server.games.snakes_and_ladders import (
@@ -57,6 +61,7 @@ from server.games.snakes_and_ladders import (
     AWAIT_SHOP,
     SnakesAndLaddersGame,
 )
+from server.games.word_bomb import WordBombGame, load_dictionary
 
 
 @dataclass
@@ -77,8 +82,9 @@ class GameServer:
         self.rooms = RoomManager()
         self._grace_tasks: dict[str, asyncio.Task] = {}
         # Active minigames + their per-room turn timers (auto deadline / bot delay),
-        # keyed by room code. At most one turn task per room (see ``_drive``).
-        self.games: dict[str, SnakesAndLaddersGame] = {}
+        # keyed by room code. At most one turn task per room (see ``_drive``). The
+        # value is whichever game class was selected on start (S&L or Word Bomb).
+        self.games: dict[str, Any] = {}
         self._phase_tasks: dict[str, asyncio.Task] = {}
         self._dispatch: dict[str, Handler] = {
             protocol.C_CREATE_ROOM: GameServer._on_create_room,
@@ -93,6 +99,7 @@ class GameServer:
             protocol.C_USE_POWERUP: GameServer._on_use_powerup,
             protocol.C_BUY_ITEM: GameServer._on_buy_item,
             protocol.C_SKIP_SHOP: GameServer._on_skip_shop,
+            protocol.C_SUBMIT_WORD: GameServer._on_submit_word,
             protocol.C_ADVANCE_PHASE: GameServer._on_advance_phase,
             protocol.C_RETURN_TO_LOBBY: GameServer._on_return_to_lobby,
         }
@@ -259,36 +266,48 @@ class GameServer:
             )
             return
 
-        game = SnakesAndLaddersGame(
-            contestants,
-            bots=bots,
-            cells=SAL_BOARD_CELLS,
-            cols=SAL_BOARD_COLS,
-            snake_count=SAL_SNAKE_COUNT,
-            ladder_count=SAL_LADDER_COUNT,
-            shop_count=SAL_SHOP_TILES,
-            wheel_count=SAL_WHEEL_TILES,
-            gold_count=SAL_GOLD_TILES,
-            debuff_count=SAL_DEBUFF_TILES,
-            starting_gold=SAL_STARTING_GOLD,
-            dice_sides=SAL_DICE_SIDES,
-            exact_finish=SAL_EXACT_FINISH,
-            prices={
-                "immunity": SAL_PRICE_IMMUNITY,
-                "boost": SAL_PRICE_BOOST,
-                "double": SAL_PRICE_DOUBLE,
-                "reroll": SAL_PRICE_REROLL,
-            },
-            boost_bonus=SAL_BOOST_BONUS,
-            gold_tile_amount=SAL_GOLD_TILE_AMOUNT,
-            slip_back=SAL_SLIP_BACK,
-            gold_tax=SAL_GOLD_TAX,
-            rng=self._make_rng(),
-        )
+        # Word Bomb is the default game the lobby starts; S&L stays playable via the
+        # lobby toggle (which sends an explicit ``game`` field).
+        game_name = msg.get("game", protocol.GAME_WORD_BOMB)
+        if game_name not in protocol.GAMES:
+            await self._send_error(ctx.conn, protocol.ERR_BAD_MESSAGE, f"unknown game {game_name!r}")
+            return
+        if game_name == protocol.GAME_WORD_BOMB:
+            words, prompts, index = load_dictionary(WB_MIN_WORDS_PER_PROMPT)
+            game = WordBombGame(contestants, bots=bots, words=words, prompts=prompts,
+                                index=index, lives=WB_LIVES,
+                                bot_fail_chance=WB_BOT_FAIL_CHANCE, rng=self._make_rng())
+        else:
+            game = SnakesAndLaddersGame(
+                contestants,
+                bots=bots,
+                cells=SAL_BOARD_CELLS,
+                cols=SAL_BOARD_COLS,
+                snake_count=SAL_SNAKE_COUNT,
+                ladder_count=SAL_LADDER_COUNT,
+                shop_count=SAL_SHOP_TILES,
+                wheel_count=SAL_WHEEL_TILES,
+                gold_count=SAL_GOLD_TILES,
+                debuff_count=SAL_DEBUFF_TILES,
+                starting_gold=SAL_STARTING_GOLD,
+                dice_sides=SAL_DICE_SIDES,
+                exact_finish=SAL_EXACT_FINISH,
+                prices={
+                    "immunity": SAL_PRICE_IMMUNITY,
+                    "boost": SAL_PRICE_BOOST,
+                    "double": SAL_PRICE_DOUBLE,
+                    "reroll": SAL_PRICE_REROLL,
+                },
+                boost_bonus=SAL_BOOST_BONUS,
+                gold_tile_amount=SAL_GOLD_TILE_AMOUNT,
+                slip_back=SAL_SLIP_BACK,
+                gold_tax=SAL_GOLD_TAX,
+                rng=self._make_rng(),
+            )
         self.games[room.code] = game
         room.in_game = True
 
-        started = protocol.encode(protocol.S_GAME_STARTED)
+        started = protocol.encode(protocol.S_GAME_STARTED, game=game_name)
         await asyncio.gather(
             *(self._safe_send(p.conn, started) for p in room.players.values() if p.connected),
             return_exceptions=True,
@@ -300,6 +319,8 @@ class GameServer:
         room, player, game = self._require_game(ctx)
         if game is None:
             return await self._game_membership_error(ctx, room)
+        if isinstance(game, WordBombGame):
+            return await self._send_error(ctx.conn, protocol.ERR_WRONG_SUBSTATE, "not available in this game")
         if not game.roll(player.id):
             return await self._reject_turn(ctx, game, player.id, AWAIT_ROLL)
         await self._after_turn_change(room, game)
@@ -308,6 +329,8 @@ class GameServer:
         room, player, game = self._require_game(ctx)
         if game is None:
             return await self._game_membership_error(ctx, room)
+        if isinstance(game, WordBombGame):
+            return await self._send_error(ctx.conn, protocol.ERR_WRONG_SUBSTATE, "not available in this game")
         if not game.use_powerup(player.id, msg.get("item")):
             return await self._reject_turn(ctx, game, player.id, AWAIT_ROLL)
         # Arming a powerup does NOT pass the turn; re-drive (refresh deadline) + broadcast.
@@ -317,6 +340,8 @@ class GameServer:
         room, player, game = self._require_game(ctx)
         if game is None:
             return await self._game_membership_error(ctx, room)
+        if isinstance(game, WordBombGame):
+            return await self._send_error(ctx.conn, protocol.ERR_WRONG_SUBSTATE, "not available in this game")
         if not game.buy_item(player.id, msg.get("item")):
             return await self._reject_turn(ctx, game, player.id, AWAIT_SHOP)
         await self._after_turn_change(room, game)
@@ -325,9 +350,28 @@ class GameServer:
         room, player, game = self._require_game(ctx)
         if game is None:
             return await self._game_membership_error(ctx, room)
+        if isinstance(game, WordBombGame):
+            return await self._send_error(ctx.conn, protocol.ERR_WRONG_SUBSTATE, "not available in this game")
         if not game.skip_shop(player.id):
             return await self._reject_turn(ctx, game, player.id, AWAIT_SHOP)
         await self._after_turn_change(room, game)
+
+    async def _on_submit_word(self, ctx: ConnCtx, msg: dict[str, Any]) -> None:
+        room, player, game = self._require_game(ctx)
+        if game is None:
+            return await self._game_membership_error(ctx, room)
+        if not isinstance(game, WordBombGame):
+            return await self._send_error(ctx.conn, protocol.ERR_WRONG_SUBSTATE,
+                                          "submit_word is only valid in word bomb")
+        result = game.submit_word(player.id, msg.get("word"))
+        if result is None:
+            if game.is_over:   # a word raced the winning explosion; say so, not "bad item"
+                return await self._send_error(ctx.conn, protocol.ERR_WRONG_PHASE, "the game is over")
+            return await self._reject_turn(ctx, game, player.id, protocol.AWAIT_WORD)
+        if result == "accepted":
+            await self._after_turn_change(room, game)   # turn passed: re-arm + broadcast
+        else:
+            await self._broadcast_game(room, game)      # rejected: fuse keeps burning — NO _drive
 
     async def _on_advance_phase(self, ctx: ConnCtx, msg: dict[str, Any]) -> None:
         room, player, game = self._require_game(ctx)
@@ -420,7 +464,7 @@ class GameServer:
             game.deadline = None
             self._phase_tasks[code] = asyncio.ensure_future(self._auto_turn(code, cur, seq))
         elif room.host_mode == protocol.HOST_AUTO:
-            seconds = SAL_SHOP_SECONDS if game.awaiting == AWAIT_SHOP else SAL_ROLL_SECONDS
+            seconds = WB_TURN_SECONDS if isinstance(game, WordBombGame) else (SAL_SHOP_SECONDS if game.awaiting == AWAIT_SHOP else SAL_ROLL_SECONDS)
             game.deadline = time.time() + seconds
             self._phase_tasks[code] = asyncio.ensure_future(self._turn_deadline(code, seconds, cur, seq))
         else:  # human host: park until the host advances (or the human acts)
@@ -479,10 +523,20 @@ class GameServer:
         await self._after_turn_change(room, game)
 
     @staticmethod
-    def _apply_auto_action(game: SnakesAndLaddersGame, pid: str) -> None:
+    def _apply_auto_action(game: Any, pid: str) -> None:
         """Resolve one auto action for the current actor without going over the wire.
         Bots follow :meth:`bot_action`; an absent human just makes minimal progress
         (roll, or leave the shop) so the game can't stall on them."""
+        if isinstance(game, WordBombGame):
+            if pid in game.bot_ids:
+                action = game.bot_action(pid)
+                if action.get("kind") == "word":
+                    if game.submit_word(pid, action.get("word")) == "accepted":
+                        return
+                game.advance()          # fumble or (freak case) rejected word: bot explodes
+            else:
+                game.advance()          # absent human: the bomb goes off in their hands
+            return
         if pid in game.bot_ids:
             action = game.bot_action(pid)
             kind = action.get("kind")

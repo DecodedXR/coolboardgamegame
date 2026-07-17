@@ -27,7 +27,7 @@ C_JOIN_ROOM = "join_room"            # {code, name}
 C_SET_READY = "set_ready"            # {ready}
 C_SET_HOST_MODE = "set_host_mode"    # {mode}            (host only)
 C_TRANSFER_HOST = "transfer_host"    # {target_id}       (host only)
-C_START_GAME = "start_game"          # {bots?:int}       (host / human-host or any player in auto)
+C_START_GAME = "start_game"          # {bots?:int, game?:str}  (host / human-host or any player in auto)
 C_LEAVE_ROOM = "leave_room"          # {}
 C_PING = "ping"                      # {}
 
@@ -47,13 +47,19 @@ C_USE_POWERUP = "use_powerup"        # {item}            (current player, pre-ro
 C_BUY_ITEM = "buy_item"              # {item}            (current player, awaiting "shop"; passes turn)
 C_SKIP_SHOP = "skip_shop"            # {}                (current player, awaiting "shop"; passes turn)
 
+# --- In-game: Word Bomb (client -> server) --------------------------------
+# A turn-based word game: the current player types a real word containing the
+# prompt substring before the fuse runs out, or the bomb explodes (a lost life).
+
+C_SUBMIT_WORD = "submit_word"        # {word}            (current player, word bomb)
+
 
 # --- Server -> Client message types ---------------------------------------
 
 S_ROOM_CREATED = "room_created"      # {code, you, room}
 S_ROOM_JOINED = "room_joined"        # {code, you, room}
 S_ROOM_UPDATE = "room_update"        # {room}
-S_GAME_STARTED = "game_started"      # {}  (clients switch to the minigame scene)
+S_GAME_STARTED = "game_started"      # {game}  (clients switch to that minigame's scene)
 S_GAME_STATE = "game_state"          # {game}  (per-player view, broadcast on every change)
 S_RETURN_TO_LOBBY = "return_to_lobby"  # {}  (game ended; clients return to the lobby)
 S_ERROR = "error"                    # {code, message}
@@ -62,7 +68,9 @@ S_PONG = "pong"                      # {}
 
 # --- Game identifiers -----------------------------------------------------
 
+GAME_WORD_BOMB = "word_bomb"
 GAME_SNAKES_AND_LADDERS = "snakes_and_ladders"
+GAMES = (GAME_WORD_BOMB, GAME_SNAKES_AND_LADDERS)
 
 # Snakes & Ladders phases. Only two: the shop is an ``awaiting`` sub-state of
 # PHASE_PLAY (not a phase), which avoids "player changed but phase didn't" races.
@@ -74,6 +82,7 @@ PHASE_GAMEOVER = "gameover"   # someone reached the final cell; winner is set
 # once rather than being re-declared in each module where they could drift.
 AWAIT_ROLL = "roll"
 AWAIT_SHOP = "shop"
+AWAIT_WORD = "word"   # word bomb: the current player must submit a word
 
 
 # --- Error codes ----------------------------------------------------------

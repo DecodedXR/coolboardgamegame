@@ -190,7 +190,7 @@ async def test_transfer_host_moves_badge():
 
     assert b.room()["host_id"] == b_id
     # And now A (no longer host) cannot start a human-host game.
-    await a.push(protocol.C_START_GAME)
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)
     assert a.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_HOST
 
     await a.drop(); await b.drop()
@@ -207,7 +207,7 @@ async def test_start_game_reaches_everyone():
     await b.push(protocol.C_JOIN_ROOM, code=code, name="B")
     await c.push(protocol.C_JOIN_ROOM, code=code, name="C")  # host + 2 contestants
 
-    await a.push(protocol.C_START_GAME)  # A is the human host
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)  # A is the human host
 
     assert protocol.S_GAME_STARTED in a.types()
     assert protocol.S_GAME_STARTED in b.types()
@@ -339,7 +339,7 @@ async def test_start_game_needs_two_contestants():
     server = GameServer()
     a, ta = await open_conn(server)
     await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_AUTO)
-    await a.push(protocol.C_START_GAME)
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)
     assert a.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_ENOUGH_PLAYERS
     assert protocol.S_GAME_STARTED not in a.types()
     await a.drop(); await ta
@@ -369,7 +369,7 @@ async def test_one_human_plus_bot_starts():
     server = GameServer()
     a, ta = await open_conn(server)
     await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
-    await a.push(protocol.C_START_GAME, bots=1)  # 1 human + 1 bot = 2 players
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots=1)  # 1 human + 1 bot = 2 players
 
     assert protocol.S_GAME_STARTED in a.types()
     g = a.game()
@@ -387,7 +387,7 @@ async def test_bad_bots_value_is_ignored():
     server = GameServer()
     a, ta = await open_conn(server)
     await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
-    await a.push(protocol.C_START_GAME, bots="lots")  # garbage -> treated as 0 bots
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots="lots")  # garbage -> treated as 0 bots
     assert a.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_ENOUGH_PLAYERS
     assert protocol.S_GAME_STARTED not in a.types()
     await a.drop(); await ta
@@ -398,7 +398,7 @@ async def test_bot_count_clamped_to_room_cap():
     a, ta = await open_conn(server)
     await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
     code = a.last(protocol.S_ROOM_CREATED)["code"]
-    await a.push(protocol.C_START_GAME, bots=99)  # absurd -> clamped to fill the room
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots=99)  # absurd -> clamped to fill the room
 
     game = server.games[code]
     assert len(game.bot_ids) == connection.MAX_PLAYERS_PER_ROOM - 1  # one human seat
@@ -412,7 +412,7 @@ async def test_bots_are_not_room_players():
     a, ta = await open_conn(server)
     await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
     code = a.last(protocol.S_ROOM_CREATED)["code"]
-    await a.push(protocol.C_START_GAME, bots=3)
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots=3)
 
     game = server.games[code]
     room = server.rooms.get(code)
@@ -432,7 +432,7 @@ async def test_roll_alternates_turn_and_rejects_off_turn():
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
     await _host_auto_room(server, [a, b], ["A", "B"])
-    await a.push(protocol.C_START_GAME)  # 2 contestants, no bots
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)  # 2 contestants, no bots
 
     cur = a.game()["current_pid"]
     cur_conn = _conn_for([a, b], cur)
@@ -465,7 +465,7 @@ async def test_shop_buy_over_the_wire():
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
     code = await _host_auto_room(server, [a, b], ["A", "B"])
-    await a.push(protocol.C_START_GAME)
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)
 
     cur = a.game()["current_pid"]
     cur_conn = _conn_for([a, b], cur)
@@ -495,7 +495,7 @@ async def test_bot_takes_its_turn_in_auto(monkeypatch):
     server = GameServer()
     a, ta = await open_conn(server)
     await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
-    await a.push(protocol.C_START_GAME, bots=1)
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots=1)
 
     human = a.game()["your_id"]
     assert a.game()["current_pid"] == human  # human first
@@ -517,7 +517,7 @@ async def test_bot_plays_in_human_host_mode(monkeypatch):
     server = GameServer()
     a, ta = await open_conn(server)  # the human host (runs the show, not a player)
     await a.push(protocol.C_CREATE_ROOM, name="Host", host_mode=protocol.HOST_HUMAN)
-    await a.push(protocol.C_START_GAME, bots=2)  # 0 human contestants + 2 bots
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots=2)  # 0 human contestants + 2 bots
 
     g = a.game()
     assert g["you_role"] == "host"
@@ -537,7 +537,7 @@ async def test_auto_deadline_auto_rolls(monkeypatch):
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
     await _host_auto_room(server, [a, b], ["A", "B"])
-    await a.push(protocol.C_START_GAME)
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)
 
     assert a.game()["last_turn"] is None
     # Nobody rolls; after the (tiny) deadline the driver auto-rolls the current actor.
@@ -558,7 +558,7 @@ async def test_human_host_force_advance_and_non_host_rejected():
     code = a.last(protocol.S_ROOM_CREATED)["code"]
     await b.push(protocol.C_JOIN_ROOM, code=code, name="B")
     await c.push(protocol.C_JOIN_ROOM, code=code, name="C")
-    await a.push(protocol.C_START_GAME)  # contestants B & C; host A runs the show
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)  # contestants B & C; host A runs the show
 
     g = a.game()
     assert g["you_role"] == "host" and len(g["players"]) == 2
@@ -590,7 +590,7 @@ async def test_disconnect_during_turn_unsticks(monkeypatch):
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
     await _host_auto_room(server, [a, b], ["A", "B"])
-    await a.push(protocol.C_START_GAME)
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)
 
     cur = a.game()["current_pid"]
     cur_conn = _conn_for([a, b], cur)
@@ -615,7 +615,7 @@ async def test_make_rng_seam_determinizes_board(monkeypatch):
         monkeypatch.setattr(server, "_make_rng", lambda: random.Random(12345))
         a, ta = await open_conn(server)
         await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_AUTO)
-        await a.push(protocol.C_START_GAME, bots=1)
+        await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots=1)
         boards.append(a.game()["board"])
         await a.push(protocol.C_RETURN_TO_LOBBY)
         await a.drop(); await ta
@@ -627,7 +627,7 @@ async def test_use_powerup_over_the_wire():
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
     code = await _host_auto_room(server, [a, b], ["A", "B"])
-    await a.push(protocol.C_START_GAME)
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)
 
     cur = a.game()["current_pid"]
     cur_conn = _conn_for([a, b], cur)
@@ -658,7 +658,7 @@ async def test_roster_change_does_not_reset_current_deadline(monkeypatch):
     b, tb = await open_conn(server)
     c, tc = await open_conn(server)
     code = await _host_auto_room(server, [a, b, c], ["A", "B", "C"])
-    await a.push(protocol.C_START_GAME)
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)
 
     game = server.games[code]
     cur = game.current_pid
@@ -682,7 +682,7 @@ async def test_superseded_turn_timer_resolves_nothing(monkeypatch):
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
     code = await _host_auto_room(server, [a, b], ["A", "B"])
-    await a.push(protocol.C_START_GAME)
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)
 
     game = server.games[code]
     stale_pid, stale_seq = game.current_pid, game.seq  # the turn a timer was armed for
@@ -711,7 +711,7 @@ async def test_return_to_lobby_ends_game():
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
     await _host_auto_room(server, [a, b], ["A", "B"])
-    await a.push(protocol.C_START_GAME)
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)
     assert a.room()["in_game"] is True
 
     await a.push(protocol.C_RETURN_TO_LOBBY)
@@ -720,7 +720,7 @@ async def test_return_to_lobby_ends_game():
     assert a.last(protocol.S_GAME_STATE) is not None  # game ran, then torn down
 
     # Non-owner can't end the game.
-    await a.push(protocol.C_START_GAME)
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)
     await b.push(protocol.C_RETURN_TO_LOBBY)
     assert b.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_HOST
 

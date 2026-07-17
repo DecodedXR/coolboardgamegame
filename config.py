@@ -72,6 +72,12 @@ SAL_ROLL_SECONDS = 30
 SAL_SHOP_SECONDS = 20
 SAL_BOT_DELAY_SECONDS = 1.2
 
+# --- Word Bomb (type-a-word-before-the-bomb-explodes) ----------------------
+WB_LIVES = 2                  # lives per player; 0 lives = eliminated
+WB_TURN_SECONDS = 12          # auto-host fuse: submit a valid word in this window
+WB_MIN_WORDS_PER_PROMPT = 500 # a prompt substring must appear in at least this many words
+WB_BOT_FAIL_CHANCE = 0.25     # chance a bot fumbles its turn and eats the explosion
+
 assert SAL_SNAKE_COUNT > SAL_LADDER_COUNT, "board must be snake-heavy (more snakes than ladders)"
 # Every special occupies a distinct cell; cells 1 and last are reserved (no specials).
 _SAL_SPECIAL_CELLS = (
