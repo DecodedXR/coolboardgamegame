@@ -52,6 +52,7 @@ C_SKIP_SHOP = "skip_shop"            # {}                (current player, awaiti
 # prompt substring before the fuse runs out, or the bomb explodes (a lost life).
 
 C_SUBMIT_WORD = "submit_word"        # {word}            (current player, word bomb)
+C_TYPING = "typing"                  # {text}            (current player, word bomb; relayed, not stored)
 
 
 # --- Server -> Client message types ---------------------------------------
@@ -64,6 +65,7 @@ S_GAME_STATE = "game_state"          # {game}  (per-player view, broadcast on ev
 S_RETURN_TO_LOBBY = "return_to_lobby"  # {}  (game ended; clients return to the lobby)
 S_ERROR = "error"                    # {code, message}
 S_PONG = "pong"                      # {}
+S_TYPING = "typing_update"           # {pid, text}  (word bomb: current player's in-progress text)
 
 
 # --- Game identifiers -----------------------------------------------------

@@ -101,6 +101,7 @@ class GameServer:
             protocol.C_BUY_ITEM: GameServer._on_buy_item,
             protocol.C_SKIP_SHOP: GameServer._on_skip_shop,
             protocol.C_SUBMIT_WORD: GameServer._on_submit_word,
+            protocol.C_TYPING: GameServer._on_typing,
             protocol.C_ADVANCE_PHASE: GameServer._on_advance_phase,
             protocol.C_RETURN_TO_LOBBY: GameServer._on_return_to_lobby,
         }
@@ -373,6 +374,23 @@ class GameServer:
             await self._after_turn_change(room, game)   # turn passed: re-arm + broadcast
         else:
             await self._broadcast_game(room, game)      # rejected: fuse keeps burning — NO _drive
+
+    async def _on_typing(self, ctx: ConnCtx, msg: dict[str, Any]) -> None:
+        """Relay the current player's in-progress text to the room. Fire-and-forget:
+        never mutates game state / seq / timers (the anti-fuse-reset rule), and
+        silently drops illegal senders — erroring per keystroke would spam a
+        client whose turn just ended mid-word."""
+        room, player, game = self._require_game(ctx)
+        if game is None or not isinstance(game, WordBombGame):
+            return
+        if game.is_over or not game.is_current(player.id):
+            return
+        text = "".join(ch for ch in str(msg.get("text") or "") if ch.isprintable())[:32]
+        frame = protocol.encode(protocol.S_TYPING, pid=player.id, text=text)
+        await asyncio.gather(
+            *(self._safe_send(p.conn, frame) for p in room.players.values() if p.connected),
+            return_exceptions=True,
+        )
 
     async def _on_advance_phase(self, ctx: ConnCtx, msg: dict[str, Any]) -> None:
         room, player, game = self._require_game(ctx)

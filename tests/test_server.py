@@ -427,6 +427,37 @@ async def test_bots_are_not_room_players():
     await a.drop(); await ta
 
 
+async def test_word_bomb_typing_relays_from_current_player_only():
+    server = GameServer()
+    a, ta = await open_conn(server)
+    b, tb = await open_conn(server)
+    await _host_auto_room(server, [a, b], ["A", "B"])
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_WORD_BOMB, bots=0)  # 2 contestants
+
+    cur = a.game()["current_pid"]
+    cur_conn = _conn_for([a, b], cur)
+    off_conn = b if cur_conn is a else a
+
+    # The current player types -> everyone (incl. the sender) sees S_TYPING pid+text.
+    await cur_conn.push(protocol.C_TYPING, text="hel")
+    for conn in (a, b):
+        upd = conn.last(protocol.S_TYPING)
+        assert upd is not None and upd["pid"] == cur and upd["text"] == "hel"
+
+    # A non-current player typing is dropped silently: no relay, no error.
+    seen = {id(a): a.types().count(protocol.S_TYPING),
+            id(b): b.types().count(protocol.S_TYPING)}
+    err_before = off_conn.last(protocol.S_ERROR)
+    await off_conn.push(protocol.C_TYPING, text="nope")
+    assert a.types().count(protocol.S_TYPING) == seen[id(a)]
+    assert b.types().count(protocol.S_TYPING) == seen[id(b)]
+    assert off_conn.last(protocol.S_ERROR) == err_before  # no keystroke-level error
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)   # cancel the pending fuse timer
+    await a.drop(); await b.drop()
+    await asyncio.gather(ta, tb)
+
+
 async def test_roll_alternates_turn_and_rejects_off_turn():
     server = GameServer()
     a, ta = await open_conn(server)

@@ -89,7 +89,8 @@ play again.
 Word Bomb is the **default** game the lobby starts; the show-runner can switch
 between it and Snakes & Ladders with the **GAME:** toggle before starting. On your
 turn a short prompt (a 2-3 letter substring, e.g. `TIO`) is riveted onto the bomb;
-type any real English word that *contains* it and hit **SUBMIT** (or Enter) before
+just type — no box to click, the word appears on the bomb (on phones, tap the bomb
+to type) — a real English word that *contains* the prompt, and hit Enter before
 the fuse burns down. A valid, unused word passes the bomb to the next player with a
 fresh prompt; a word that is not real, does not contain the prompt, or was already
 used is bounced (the fuse keeps burning - it does not reset). If the fuse runs out

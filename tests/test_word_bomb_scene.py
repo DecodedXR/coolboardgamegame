@@ -29,6 +29,7 @@ from client.scenes.word_bomb import (
     heat_color,
     press_of,
     seat_positions,
+    tail_that_fits,
 )
 from shared import protocol
 from tests.test_snakes_scene import FakeApp, FakeNet  # noqa: F401
@@ -273,13 +274,97 @@ def test_reject_input_flash_is_personal() -> None:
 
 def test_submit_sends_the_word_and_clears_but_ignores_empty() -> None:
     app, scene = _scene()
-    scene.input.text = "hello"
+    scene.typed = "hello"
     scene._submit()
-    assert app.net.sent == [(protocol.C_SUBMIT_WORD, {"word": "hello"})]
-    assert scene.input.text == ""
+    assert app.net.sent == [
+        (protocol.C_SUBMIT_WORD, {"word": "hello"}),
+        (protocol.C_TYPING, {"text": ""}),      # clears everyone's live view
+    ]
+    assert scene.typed == ""
     app.net.sent.clear()
     scene._submit()                        # empty -> nothing sent
     assert app.net.sent == []
+
+
+# --- typing: keys land on the bomb, every edit is relayed --------------------
+
+def _key(key: int, unicode: str = "") -> pygame.event.Event:
+    return pygame.event.Event(pygame.KEYDOWN, key=key, unicode=unicode)
+
+
+def test_typing_a_key_appends_and_relays_but_a_bare_modifier_is_silent() -> None:
+    app, scene = _scene()
+    app.gamestate = _wb_gs()               # your turn, PLAY phase
+    scene.sfx = _RecSfx()
+
+    scene.handle_event(_key(pygame.K_a, "a"))
+    assert scene.typed == "a"
+    assert app.net.sent == [(protocol.C_TYPING, {"text": "a"})]
+
+    app.net.sent.clear()
+    scene.handle_event(_key(pygame.K_LSHIFT, ""))   # modifier -> no text, no send
+    assert scene.typed == "a"
+    assert app.net.sent == []
+
+
+def test_enter_submits_then_clears_everyone() -> None:
+    app, scene = _scene()
+    app.gamestate = _wb_gs()
+    scene.sfx = _RecSfx()
+    scene.typed = "cat"
+
+    scene.handle_event(_key(pygame.K_RETURN))
+    assert scene.typed == ""
+    assert app.net.sent == [
+        (protocol.C_SUBMIT_WORD, {"word": "cat"}),
+        (protocol.C_TYPING, {"text": ""}),
+    ]
+
+
+def test_on_message_typing_sets_live_only_for_the_current_other_player() -> None:
+    app, scene = _scene()
+    app.gamestate = _wb_gs(current_pid="p2", your_turn=False)
+
+    scene.on_message({"type": protocol.S_TYPING, "pid": "p2", "text": "ab"})
+    assert scene.live_typing == "ab"       # current + not me -> shown
+
+    scene.live_typing = "sentinel"
+    scene.on_message({"type": protocol.S_TYPING, "pid": "p1", "text": "zz"})
+    assert scene.live_typing == "sentinel"  # my own id -> ignored
+
+
+def test_current_pid_change_clears_typed_and_live() -> None:
+    app, scene = _scene()
+    scene._prev_current = "p2"
+    scene.typed = "half"
+    scene.live_typing = "theirs"
+    scene._ingest_state(_wb_gs(current_pid="p1"))   # turn hands to me
+    assert scene.typed == ""
+    assert scene.live_typing == ""
+
+
+def test_browser_bomb_tap_prompts_and_submits_only_on_the_bomb(monkeypatch) -> None:
+    from client import browser_io
+    app, scene = _scene()
+    app.gamestate = _wb_gs()
+    scene.sfx = _RecSfx()
+
+    opened: list[tuple[str, str]] = []
+    monkeypatch.setattr(browser_io, "is_browser", lambda: True)
+    monkeypatch.setattr(browser_io, "prompt", lambda label, current: opened.append((label, current)) or "hello")
+
+    scene.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(240, 300)))
+    assert opened == [("type a word...", "")]
+    assert (protocol.C_SUBMIT_WORD, {"word": "hello"}) in app.net.sent
+
+    opened.clear()
+    scene.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(24, 706)))
+    assert opened == []                    # off-bomb tap opens no prompt
+
+
+def test_tail_that_fits_keeps_the_end() -> None:
+    assert tail_that_fits("abcdef", 3, len) == "def"
+    assert tail_that_fits("ab", 3, len) == "ab"
 
 
 # --- sfx catalog ------------------------------------------------------------

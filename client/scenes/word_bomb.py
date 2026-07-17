@@ -119,6 +119,14 @@ def feed_line(event: dict) -> str:
     return ""
 
 
+def tail_that_fits(text: str, max_w: int, measure) -> str:
+    """Longest tail of ``text`` whose ``measure(tail)`` fits ``max_w`` — long
+    words keep the end (where the typing happens) on screen."""
+    while text and measure(text) > max_w:
+        text = text[1:]
+    return text
+
+
 # --- the scene ------------------------------------------------------------
 
 class WordBombScene(Scene):
@@ -127,9 +135,10 @@ class WordBombScene(Scene):
         self.sfx = Sfx()
         self.status = ""
 
+        self.typed = ""          # my in-progress word (your-turn only)
+        self.live_typing = ""    # the current player's in-progress word (theirs)
+
         # Input widgets, created ONCE (never per frame).
-        self.input = ui.TextInput((24, 640, 300, 50), placeholder="type a word...", max_len=32)
-        self.submit_btn = ui.Button("SUBMIT", (336, 640, 120, 50), self._submit)
         self.detonate_btn = ui.Button("DETONATE", (24, 706, 208, 50), self._detonate)
         self.lobby_btn = ui.Button("LOBBY", (248, 706, 208, 50), self._return_to_lobby)
 
@@ -184,10 +193,11 @@ class WordBombScene(Scene):
     # --- actions (forward-only) -------------------------------------------
 
     def _submit(self) -> None:
-        if not self.input.text:
+        if not self.typed:
             return
-        self.app.net.send(protocol.C_SUBMIT_WORD, word=self.input.text)
-        self.input.text = ""
+        self.app.net.send(protocol.C_SUBMIT_WORD, word=self.typed)
+        self.typed = ""
+        self.app.net.send(protocol.C_TYPING, text="")   # clears everyone's view
 
     def _detonate(self) -> None:
         self.app.net.send(protocol.C_ADVANCE_PHASE)
@@ -207,6 +217,9 @@ class WordBombScene(Scene):
             self.app.gamestate = None
             from client.scenes.lobby import LobbyScene
             self.app.go_to(LobbyScene(self.app))
+        elif t == protocol.S_TYPING:
+            if msg.get("pid") == self.gs.get("current_pid") and msg.get("pid") != self.my_id:
+                self.live_typing = str(msg.get("text") or "")[:32]
         elif t == protocol.S_ERROR:
             self.status = msg.get("message", "error")
 
@@ -234,9 +247,9 @@ class WordBombScene(Scene):
                 if cur == self.my_id:
                     self.sfx.play("alarm")
             if cur == self.my_id and not over:
-                # Turn transition to me: clear + focus so desktop can type at once.
-                self.input.text = ""
-                self.input.focused = True
+                # Turn transition to me: clear so desktop can type at once.
+                self.typed = ""
+            self.live_typing = ""   # any bomb pass invalidates the old typer's text
             deadline = state.get("deadline")
             self._turn_total = max(0.001, deadline - time.time()) if deadline else None
             self._prev_current = cur
@@ -364,20 +377,26 @@ class WordBombScene(Scene):
                 self.detonate_btn.handle(event)
             self.lobby_btn.handle(event)
 
-        # Input row, live only on our own play-turn.
+        # Typing, live only on our own play-turn. No focus, no box: keys go
+        # straight onto the bomb, and every edit is relayed to the room.
         if gs.get("your_turn") and gs.get("phase") == protocol.PHASE_PLAY:
-            # Enter submits BEFORE the TextInput sees it (it swallows Enter to unfocus).
-            if (event.type == pygame.KEYDOWN
-                    and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER)
-                    and self.input.text):
-                self._submit()
-                return
-            self.submit_btn.handle(event)
-            self.input.handle(event)
-            # Browser: the native prompt filled the field on tap -> submit at once
-            # (tap -> type -> OK is the whole loop; no second tap on SUBMIT).
-            if (browser_io.is_browser() and event.type == pygame.MOUSEBUTTONDOWN
-                    and event.button == 1 and self.input.text):
+            if event.type == pygame.KEYDOWN:
+                before = self.typed
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self._submit()
+                    return
+                if event.key == pygame.K_BACKSPACE:
+                    self.typed = self.typed[:-1]
+                elif event.unicode and event.unicode.isprintable() and len(self.typed) < 32:
+                    self.typed += event.unicode
+                if self.typed != before:
+                    self.app.net.send(protocol.C_TYPING, text=self.typed)
+            # Browser touch fallback: a phone can't type into the canvas, so
+            # tapping the bomb opens the native prompt, then submits at once.
+            elif (browser_io.is_browser() and event.type == pygame.MOUSEBUTTONDOWN
+                    and event.button == 1 and getattr(event, "pos", None)
+                    and math.hypot(event.pos[0] - CENTER[0], event.pos[1] - CENTER[1]) <= BOMB_R + 16):
+                self.typed = browser_io.prompt("type a word...", self.typed)[:32]
                 self._submit()
 
     # --- drawing (needs a real Surface/font) ------------------------------
@@ -422,6 +441,8 @@ class WordBombScene(Scene):
         self._draw_bomb(surf, press, rim, ox, oy, now)
         self._draw_countdown(surf, frac, rim, remaining, deadline)
         self._draw_prompt_tiles(surf, gs.get("prompt", ""), heat, press, ox, oy, now)
+        if gs.get("phase") == protocol.PHASE_PLAY:
+            self._draw_typed(surf, gs, now, ox, oy)
         self._draw_players(surf, gs, heat, ox, oy)
 
         # 8. your-turn / waiting banner
@@ -446,10 +467,6 @@ class WordBombScene(Scene):
         # 10. particles (skipped while the gameover overlay redraws them on top)
         if not over:
             self._draw_particles(surf)
-
-        # 11. input row
-        if gs.get("your_turn") and gs.get("phase") == protocol.PHASE_PLAY:
-            self._draw_input(surf, now)
 
         # 12. show-runner controls
         if self._is_runner():
@@ -575,12 +592,17 @@ class WordBombScene(Scene):
               cy + math.sin(ang) * BOMB_R - math.sin(perp) * 5)
         pygame.draw.polygon(surf, heat, [tip, b1, b2])
 
-    def _draw_input(self, surf, now) -> None:
-        dx = int(4 * math.sin(now * 60) * self._input_flash / 0.3) if self._input_flash > 0 else 0
-        orig = self.input.rect.x
-        self.input.rect.x = orig + dx
-        self.input.draw(surf)
-        if self._input_flash > 0:
-            pygame.draw.rect(surf, HOT, self.input.rect, width=2, border_radius=6)
-        self.input.rect.x = orig
-        self.submit_btn.draw(surf)
+    def _draw_typed(self, surf, gs, now, ox, oy) -> None:
+        mine = bool(gs.get("your_turn"))
+        text = self.typed if mine else self.live_typing
+        if not mine and not text:
+            return
+        shown = tail_that_fits(text, 400, lambda s: ui.get_font(20).size(s)[0])
+        if mine and (now % 1.0) < 0.6:
+            shown += "_"                       # blinking caret: type right here
+        if self._input_flash > 0:              # the reject rattle, now on the bomb
+            ox += int(4 * math.sin(now * 60) * self._input_flash / 0.3)
+            color = HOT
+        else:
+            color = ui.GOOD if (gs.get("prompt") or "").lower() in text.lower() else ui.TEXT
+        ui.Label(shown, (CENTER[0] + ox, CENTER[1] + 48 + oy), 20, color, center=True).draw(surf)
