@@ -43,7 +43,21 @@ class LobbyScene(Scene):
         self.bots = 0
         self.bots_minus = ui.Button("-", (_LIST_X + 152, _BOTS_Y, _BOTS_BTN, _BOTS_BTN), self._bots_dec)
         self.bots_plus = ui.Button("+", (_LIST_X + 244, _BOTS_Y, _BOTS_BTN, _BOTS_BTN), self._bots_inc)
+        # The show-runner picks which minigame the lobby launches. Word Bomb is the
+        # default; the button toggles between the two ``protocol.GAMES``.
+        self.game = protocol.GAME_WORD_BOMB
+        self.game_btn = ui.Button(self._game_label(), (_LIST_X, 494, _LIST_W, 40), self._toggle_game)
         self.status = ""
+
+    # --- game picker ------------------------------------------------------
+
+    def _game_label(self) -> str:
+        return "GAME: WORD BOMB" if self.game == protocol.GAME_WORD_BOMB else "GAME: SNAKES & LADDERS"
+
+    def _toggle_game(self) -> None:
+        self.game = (protocol.GAME_SNAKES_AND_LADDERS
+                     if self.game == protocol.GAME_WORD_BOMB
+                     else protocol.GAME_WORD_BOMB)
 
     # --- bots stepper -----------------------------------------------------
 
@@ -107,7 +121,7 @@ class LobbyScene(Scene):
         # since the count was dialed in), so the request matches what the server
         # can seat.
         self.bots = min(self.bots, self._max_bots())
-        self.app.net.send(protocol.C_START_GAME, bots=self.bots)
+        self.app.net.send(protocol.C_START_GAME, bots=self.bots, game=self.game)
 
     def _leave(self) -> None:
         self.app.net.send(protocol.C_LEAVE_ROOM)
@@ -140,6 +154,9 @@ class LobbyScene(Scene):
         if self._show_stepper():
             self.bots_minus.handle(event)
             self.bots_plus.handle(event)
+        # Only the show-runner picks the game.
+        if self._can_start():
+            self.game_btn.handle(event)
         # In human-host mode, the host clicks a player row to hand off the host role.
         if self.is_host and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             for p, rect in self._row_rects():
@@ -152,8 +169,12 @@ class LobbyScene(Scene):
             self.app.room = msg["room"]
         elif t == protocol.S_GAME_STARTED:
             self.app.gamestate = None
-            from client.scenes.snakes_and_ladders import SnakesAndLaddersScene
-            self.app.go_to(SnakesAndLaddersScene(self.app))
+            if msg.get("game") == protocol.GAME_SNAKES_AND_LADDERS:
+                from client.scenes.snakes_and_ladders import SnakesAndLaddersScene
+                self.app.go_to(SnakesAndLaddersScene(self.app))
+            else:
+                from client.scenes.word_bomb import WordBombScene
+                self.app.go_to(WordBombScene(self.app))
         elif t == protocol.S_ERROR:
             self.status = msg.get("message", "error")
 
@@ -193,6 +214,11 @@ class LobbyScene(Scene):
             self.bots_minus.draw(surf)
             ui.Label(str(self.bots), (_LIST_X + 206, _BOTS_Y + 8), 20, ui.TEXT).draw(surf)
             self.bots_plus.draw(surf)
+
+        # Game picker (runner only).
+        if self._can_start():
+            self.game_btn.label = self._game_label()
+            self.game_btn.draw(surf)
 
         # Bottom control bar (2x2 grid).
         self.ready_btn.label = "UNREADY" if self.me.get("ready") else "READY"

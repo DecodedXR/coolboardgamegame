@@ -44,6 +44,29 @@ SOUNDS: dict[str, list[Segment]] = {
     "buy": [(520.0, 0.07, "sine"), (780.0, 0.10, "sine")],
     "win": [(523.0, 0.10, "square"), (659.0, 0.10, "square"),
             (784.0, 0.10, "square"), (1047.0, 0.20, "square")],
+    # word bomb ---------------------------------------------------------------
+    # the clock: dry metronome tap; its hotter sibling is higher AND shorter,
+    # so the acceleration reads even on phone speakers
+    "tick": [(1300.0, 0.03, "square")],
+    "tick_hot": [(1650.0, 0.025, "square")],
+    # bomb handed on: quick 3-note rise, airy sine so it stays out of the way
+    "pass": [(500.0, 0.04, "sine"), (700.0, 0.04, "sine"), (900.0, 0.05, "sine")],
+    # it's YOUR problem now: hard double-hit + upward kick, square = urgent
+    "alarm": [(880.0, 0.07, "square"), (0.0, 0.03, "sine"),
+              (880.0, 0.07, "square"), (1100.0, 0.10, "square")],
+    # valid word: small consonant rise (matches "gold"/"buy" family in feel)
+    "type_ok": [(620.0, 0.05, "sine"), (930.0, 0.07, "sine")],
+    # bounced word: low saw shrug, short — it fires often, it must not grate
+    "type_bad": [(240.0, 0.08, "saw"), (160.0, 0.10, "saw")],
+    # the explosion: 6-step saw avalanche 180->48 Hz over ~0.67s; stepped
+    # segments approximate a pitch-drop sweep within the constant-freq model
+    "boom": [(180.0, 0.06, "saw"), (140.0, 0.07, "saw"), (110.0, 0.08, "saw"),
+             (85.0, 0.10, "saw"), (65.0, 0.14, "saw"), (48.0, 0.22, "saw")],
+    # a player is out: three falling square notes (G4-E4-C4), layered over boom
+    "dirge": [(392.0, 0.12, "square"), (330.0, 0.12, "square"), (262.0, 0.20, "square")],
+    # two players, one life each: tritone menace sting (A3 -> D#4), saw growl
+    "sudden_death": [(220.0, 0.10, "saw"), (0.0, 0.05, "sine"),
+                     (220.0, 0.10, "saw"), (0.0, 0.05, "sine"), (311.0, 0.18, "saw")],
 }
 
 # Linear fade applied to each segment's edges so abrupt starts/stops don't click.

@@ -302,7 +302,7 @@ def test_lobby_routes_started_game_to_snakes_scene() -> None:
     app = FakeApp()
     lobby = LobbyScene(app)
     lobby.on_enter()
-    lobby.on_message({"type": protocol.S_GAME_STARTED})
+    lobby.on_message({"type": protocol.S_GAME_STARTED, "game": protocol.GAME_SNAKES_AND_LADDERS})
     assert isinstance(app.scene, SnakesAndLaddersScene)
 
 
@@ -313,7 +313,7 @@ def test_lobby_start_sends_bot_count() -> None:
     lobby.on_enter()
     assert lobby.bots == 0
     lobby._start()
-    assert app.net.sent[-1] == (protocol.C_START_GAME, {"bots": 0})
+    assert app.net.sent[-1] == (protocol.C_START_GAME, {"bots": 0, "game": protocol.GAME_WORD_BOMB})
 
 
 def test_lobby_bots_stepper_clamps() -> None:
@@ -338,7 +338,7 @@ def test_lobby_start_forwards_chosen_bot_count() -> None:
     lobby._bots_inc()
     lobby._bots_inc()
     lobby._start()
-    assert app.net.sent[-1] == (protocol.C_START_GAME, {"bots": 2})
+    assert app.net.sent[-1] == (protocol.C_START_GAME, {"bots": 2, "game": protocol.GAME_WORD_BOMB})
 
 
 def _roster(app: FakeApp, n: int) -> None:
@@ -373,7 +373,7 @@ def test_lobby_stepper_hidden_and_count_clamped_when_room_full() -> None:
     lobby._bots_inc()
     assert lobby.bots == 0
     lobby._start()                  # a stale count would be clamped at start, too
-    assert app.net.sent[-1] == (protocol.C_START_GAME, {"bots": 0})
+    assert app.net.sent[-1] == (protocol.C_START_GAME, {"bots": 0, "game": protocol.GAME_WORD_BOMB})
 
 
 # --- cutscene wiring (BUG: skip banner must survive the turn advance) ------
