@@ -282,7 +282,7 @@ async def test_word_bomb_human_host_detonate_costs_a_life(monkeypatch) -> None:
 
 
 async def test_word_bomb_bot_fumbles_until_human_wins(monkeypatch) -> None:
-    monkeypatch.setattr(connection, "SAL_BOT_DELAY_SECONDS", 0.01)  # bot autoplays fast
+    monkeypatch.setattr(connection, "WB_BOT_DELAY_SECONDS", 0.01)   # bot autoplays fast
     monkeypatch.setattr(connection, "WB_BOT_FAIL_CHANCE", 1.0)      # the bot always fumbles
     server = GameServer()
     a, ta = await open_conn(server)

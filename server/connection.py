@@ -54,6 +54,7 @@ from config import (
     WB_TURN_SECONDS,
     WB_MIN_WORDS_PER_PROMPT,
     WB_BOT_FAIL_CHANCE,
+    WB_BOT_DELAY_SECONDS,
 )
 from server.rooms import Room, RoomManager
 from server.games.snakes_and_ladders import (
@@ -492,7 +493,10 @@ class GameServer:
         superseded timer that still fires is a no-op (the local single-resolution
         guard, independent of cancellation timing)."""
         try:
-            await asyncio.sleep(SAL_BOT_DELAY_SECONDS)
+            delay = (WB_BOT_DELAY_SECONDS
+                     if isinstance(self.games.get(code), WordBombGame)
+                     else SAL_BOT_DELAY_SECONDS)
+            await asyncio.sleep(delay)
         except asyncio.CancelledError:
             return
         if self._phase_tasks.get(code) is asyncio.current_task():
