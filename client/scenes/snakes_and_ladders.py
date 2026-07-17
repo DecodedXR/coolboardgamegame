@@ -156,10 +156,11 @@ def header_subtitle(gs: dict[str, Any], name_of: Callable[[Optional[str]], str])
 class SnakesAndLaddersScene(Scene):
     def on_enter(self) -> None:
         w, h = self.app.width, self.app.height
-        # Audio + the animation/overlay components. The Sfx mixer stays down until
-        # the first click (browser autoplay rules); the animator fires cues through
-        # it as the timeline replays.
+        # Audio + the animation/overlay components. init() now: by scene time the
+        # player has clicked through the menus (autoplay unlocked), and spectators
+        # may never click here; per-event init() calls below remain as retries.
         self.sfx = Sfx()
+        self.sfx.init()
         self.animator = TokenAnimator(self.sfx)
         self.wheel = Wheel()
         self.cutscene = Cutscene()

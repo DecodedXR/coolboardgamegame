@@ -33,6 +33,28 @@ def prompt(label: str, current: str = "") -> str:
     return str(result) if result is not None else current
 
 
+def lock_canvas_aspect(width: int, height: int) -> None:
+    """Stop pygbag's template from stretching the canvas (browser-only).
+
+    The stock template CSS is ``width:100%; height:100%``, which smears a
+    portrait 480x800 game across a landscape monitor. Override it with the
+    largest centered box at the game's aspect ratio; SDL maps mouse coords
+    through the CSS box, so input stays aligned.
+    """
+    if not is_browser():
+        return
+    import platform  # pygbag-provided in the browser; exposes the JS window
+
+    ratio = width / height
+    try:
+        style = platform.window.canvas.style
+        style.width = f"min(100vw, calc(100vh * {ratio}))"
+        style.height = f"min(100vh, calc(100vw / {ratio}))"
+        style.margin = "auto"  # template sets absolute + 0 insets -> centers both axes
+    except Exception as exc:
+        print("browser_io.lock_canvas_aspect error:", exc)
+
+
 def warm_up_server(http_url: str) -> None:
     """Fire-and-forget GET to wake a sleeping free-tier server (browser-only).
 

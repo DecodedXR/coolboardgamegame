@@ -140,6 +140,10 @@ class WordBombScene(Scene):
     def on_enter(self) -> None:
         w, h = self.app.width, self.app.height
         self.sfx = Sfx()
+        # Bring audio up now: by scene time the player has clicked through the
+        # menus, so browser autoplay is already unlocked — and a spectator (or a
+        # keyboard-only typist) may never click inside this scene at all.
+        self.sfx.init()
         self.status = ""
 
         self.typed = ""          # my in-progress word (your-turn only)
@@ -372,8 +376,8 @@ class WordBombScene(Scene):
     # --- input ------------------------------------------------------------
 
     def handle_event(self, event: pygame.event.Event) -> None:
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            self.sfx.init()
+        if event.type in (pygame.MOUSEBUTTONDOWN, pygame.KEYDOWN):
+            self.sfx.init()  # retry path: keys are the only gesture when typing
 
         gs = self.gs
         over = gs.get("phase") == protocol.PHASE_GAMEOVER

@@ -36,7 +36,7 @@ prompts, judges, torments contestants) or the room can run **host-less / automat
   play, no Python or install required.
 - **Word Bomb (default game) ✅** A Bomb-Party-style word game, now the game the
   lobby launches by default (Snakes & Ladders stays a lobby toggle). The current
-  player sees a 2-3 letter prompt and must type a real English word *containing*
+  player sees a 2-letter prompt and must type a real English word *containing*
   it before the fuse burns down; a valid, unused word passes the bomb on with a
   fresh prompt. Timing out explodes the bomb (a lost life), and 0 lives means
   elimination - last player alive wins. The server ships a ~168k-word dictionary
@@ -88,7 +88,7 @@ play again.
 
 Word Bomb is the **default** game the lobby starts; the show-runner can switch
 between it and Snakes & Ladders with the **GAME:** toggle before starting. On your
-turn a short prompt (a 2-3 letter substring, e.g. `TIO`) is riveted onto the bomb;
+turn a short prompt (a 2-letter substring, e.g. `TI` — always with 1000+ possible words) is riveted onto the bomb;
 just type — no box to click, the word appears on the bomb (on phones, tap the bomb
 to type) — a real English word that *contains* the prompt, and hit Enter before
 the fuse burns down. A valid, unused word passes the bomb to the next player with a

@@ -41,7 +41,7 @@ _BOT_POOL_CAP = 200   # per-prompt candidate words kept for bots
 
 
 def derive_prompts(words, min_count, pool_cap=_BOT_POOL_CAP):
-    """Scan every word's 2- and 3-letter substrings. Return ``(prompts, index,
+    """Scan every word's 2-letter substrings. Return ``(prompts, index,
     counts)``:
 
     ``prompts`` = sorted list of substrings appearing in >= ``min_count`` words;
@@ -55,11 +55,8 @@ def derive_prompts(words, min_count, pool_cap=_BOT_POOL_CAP):
     for w in words:
         seen = set()
         n = len(w)
-        for i in range(n):
-            if i + 2 <= n:
-                seen.add(w[i:i + 2])
-            if i + 3 <= n:
-                seen.add(w[i:i + 3])
+        for i in range(n - 1):
+            seen.add(w[i:i + 2])
         for sub in seen:
             counts[sub] += 1
             bucket = index.get(sub)

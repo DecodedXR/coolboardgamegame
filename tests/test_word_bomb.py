@@ -186,6 +186,7 @@ def test_derive_prompts_keeps_only_frequent_substrings() -> None:
     words = ["cat", "catalog", "cot"]
     assert "at" in prompts and "ca" in prompts     # each in >= 2 words
     assert "log" not in prompts                    # only in "catalog"
+    assert all(len(p) == 2 for p in prompts)       # 2-letter only: counts start in the thousands
     for p in prompts:
         assert sum(1 for w in words if p in w) >= 2
         assert p in index and index[p]             # every prompt has bot candidates

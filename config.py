@@ -77,7 +77,7 @@ WB_LIVES = 2                  # lives per player; 0 lives = eliminated
 WB_FUSE_START = 20.0          # fuse for a fresh bomb (seconds)
 WB_FUSE_STEP = 0.5            # each accepted word shaves this off the next fuse
 WB_FUSE_FLOOR = 7.0           # the fuse never gets shorter than this
-WB_MIN_WORDS_PER_PROMPT = 500 # a prompt substring must appear in at least this many words
+WB_MIN_WORDS_PER_PROMPT = 1000 # a prompt substring must appear in at least this many words
 WB_BOT_FAIL_CHANCE = 0.25     # chance a bot fumbles its turn and eats the explosion
 WB_BOT_DELAY_SECONDS = 6      # how long a bot "thinks" before answering (word bomb only)
 

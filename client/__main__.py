@@ -30,6 +30,7 @@ class App:
         pygame.init()
         pygame.display.set_caption("The Scuffed Gameshow")
         self.surface = pygame.display.set_mode((WIDTH, HEIGHT))
+        browser_io.lock_canvas_aspect(WIDTH, HEIGHT)
         self.clock = pygame.time.Clock()
         self.width, self.height = WIDTH, HEIGHT
 
