@@ -47,6 +47,8 @@ class Label:
         self.center = center
 
     def draw(self, surf: pygame.Surface) -> None:
+        if not self.text:
+            return  # pygbag's older pygame-ce dies on font.render("") — skip, don't crash
         font = get_font(self.size)
         img = font.render(self.text, True, self.color)
         rect = img.get_rect()
