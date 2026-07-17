@@ -34,12 +34,22 @@ prompts, judges, torments contestants) or the room can run **host-less / automat
 - **Tier 4 - browser/WASM client ✅** The pygame client compiles to WebAssembly
   via **pygbag** and is hosted on **GitHub Pages** - opening a link is enough to
   play, no Python or install required.
+- **Word Bomb (default game) ✅** A Bomb-Party-style word game, now the game the
+  lobby launches by default (Snakes & Ladders stays a lobby toggle). The current
+  player sees a 2-3 letter prompt and must type a real English word *containing*
+  it before the fuse burns down; a valid, unused word passes the bomb on with a
+  fresh prompt. Timing out explodes the bomb (a lost life), and 0 lives means
+  elimination - last player alive wins. The server ships a ~168k-word dictionary
+  and validates every submission; bots, the human-host **DETONATE** button, and
+  the auto-host fuse timer all work exactly as in Snakes & Ladders. A lit cartoon
+  bomb, a crawling spark, a ring of seated players, and a whole scene that heats
+  up as the fuse shortens carry the drama.
 
 ```
 shared/protocol.py    wire format (message types + JSON encode/decode), shared by both sides
 server/               authoritative websockets server (rooms, host logic, broadcasting)
-server/games/         pluggable minigames - snakes_and_ladders.py (pure rules + turn timeline)
-client/               pygame client (net thread + scenes: connect / menu / lobby / snakes_and_ladders)
+server/games/         pluggable minigames - snakes_and_ladders.py, word_bomb.py (+ words.txt dictionary)
+client/               pygame client (net thread + scenes: connect / menu / lobby / snakes_and_ladders / word_bomb)
 client/board_render.py, token_anim.py, wheel.py, shop_ui.py, cutscene.py, sfx.py  - board components
 config.py             HOST/PORT, room sizing, and Snakes & Ladders tuning (board, tiles, economy, timers)
 tests/                headless tests - test_server.py (end-to-end) + test_snakes_and_ladders.py (rules)
@@ -73,6 +83,21 @@ double / reroll) can be armed *before* you roll. Reach the final cell exactly to
 and bots take their own turns; in **human** mode the host can force the current turn
 along with **NEXT**. When someone wins, the host returns everyone to the lobby to
 play again.
+
+### Playing Word Bomb
+
+Word Bomb is the **default** game the lobby starts; the show-runner can switch
+between it and Snakes & Ladders with the **GAME:** toggle before starting. On your
+turn a short prompt (a 2-3 letter substring, e.g. `TIO`) is riveted onto the bomb;
+type any real English word that *contains* it and hit **SUBMIT** (or Enter) before
+the fuse burns down. A valid, unused word passes the bomb to the next player with a
+fresh prompt; a word that is not real, does not contain the prompt, or was already
+used is bounced (the fuse keeps burning - it does not reset). If the fuse runs out
+the bomb explodes and you lose a life; at 0 lives you are eliminated, and the last
+player standing wins. In **auto** mode the fuse is a per-turn countdown and bots
+take their own turns; in **human** mode the host holds the detonator and clicks
+**DETONATE** to blow the current player's turn. Bots fill empty seats just like in
+Snakes & Ladders.
 
 ## Setup
 
@@ -108,8 +133,9 @@ python -m pip install -r requirements.txt
 
 5. In the lobby: toggle **READY**; the **owner** can flip host mode; in HUMAN mode the
    host clicks a player to **pass the host role**; the starter can seat **bots** with
-   the `- bots N +` stepper; the host (HUMAN) or owner (AUTO) clicks **START GAME** to
-   launch Snakes & Ladders (see *Playing Snakes & Ladders* above).
+   the `- bots N +` stepper and pick the game with the **GAME:** toggle (Word Bomb by
+   default, or Snakes & Ladders); the host (HUMAN) or owner (AUTO) clicks **START
+   GAME** to launch it (see *Playing Word Bomb* / *Playing Snakes & Ladders* above).
 
 ## Cloud (live)
 
