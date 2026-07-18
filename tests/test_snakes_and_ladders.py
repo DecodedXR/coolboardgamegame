@@ -343,8 +343,8 @@ def test_shop_enter_pauses_turn():
 def test_shop_stock_is_secret_to_others():
     g = make_game()
     enter_shop(g)
-    me = g.public("p0", host_id=None)
-    other = g.public("p1", host_id=None)
+    me = g.public("p0")
+    other = g.public("p1")
     assert "shop" in me and me["shop"]["stock"]
     assert "shop" not in other
 
@@ -601,10 +601,9 @@ def test_bots_are_players_but_not_contestants():
 
 def test_public_roles_and_player_rows():
     g = make_game(humans=2, bots=1)
-    assert g.public("p0", host_id="hostX")["you_role"] == "contestant"
-    assert g.public("hostX", host_id="hostX")["you_role"] == "host"
-    assert g.public("nobody", host_id="hostX")["you_role"] == "spectator"
-    view = g.public("p0", host_id=None)
+    assert g.public("p0")["you_role"] == "contestant"
+    assert g.public("nobody")["you_role"] == "spectator"  # not seated -> spectator
+    view = g.public("p0")
     assert view["name"] == protocol.GAME_SNAKES_AND_LADDERS
     rows = {r["id"]: r for r in view["players"]}
     assert set(rows) == {"p0", "p1", "b0"}
@@ -612,7 +611,7 @@ def test_public_roles_and_player_rows():
     for r in rows.values():
         assert set(r) >= {"id", "name", "pos", "gold", "items", "is_bot", "finished"}
     assert view["your_turn"] is True  # p0 is current
-    assert g.public("p1", host_id=None)["your_turn"] is False
+    assert g.public("p1")["your_turn"] is False
 
 
 def test_all_submitted_is_always_false():

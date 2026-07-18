@@ -140,6 +140,9 @@ def test_warm_up_server_evals_no_cors_fetch(fake_window):
     assert js.startswith("fetch(")
     assert '"https://app.onrender.com/"' in js  # json-encoded → valid JS string literal
     assert "no-cors" in js
+    # The .catch is load-bearing: an async fetch rejection is invisible to Python's
+    # try/except and crashes pygbag with "Failed to fetch" if it escapes to JS.
+    assert ".catch(" in js
 
 
 def test_warm_up_server_is_noop_off_browser(monkeypatch):

@@ -71,6 +71,7 @@ class _RecSfx:
 
     def __init__(self) -> None:
         self.played: list[str] = []
+        self.volumes: list[float] = []
 
     def init(self) -> None:
         pass
@@ -78,8 +79,9 @@ class _RecSfx:
     def pump(self) -> None:
         pass
 
-    def play(self, name: str) -> None:
+    def play(self, name: str, volume: float = 1.0) -> None:
         self.played.append(name)
+        self.volumes.append(volume)
 
 
 def _scene(**app_over) -> tuple[Any, WordBombScene]:
@@ -180,10 +182,9 @@ def test_draw_runs_in_all_visual_modes() -> None:
     scene._turn_total = 12.0
     scene.draw(surf)
 
-    # human-host mode: no fuse, and we are the show-runner.
-    app.room = {"host_mode": protocol.HOST_HUMAN, "owner_id": "p1", "host_id": "p1",
-                "code": "ABCD", "players": []}
-    app.gamestate = _wb_gs(deadline=None, you_role="host")
+    # no fuse yet (deadline not armed) -> the fuse-less draw path.
+    app.room = {"owner_id": "p1", "code": "ABCD", "players": []}
+    app.gamestate = _wb_gs(deadline=None)
     scene.draw(surf)
 
     # sudden death: 2 alive, one life each.
@@ -384,8 +385,35 @@ def test_word_bomb_sfx_cues_are_present_and_short() -> None:
         assert name in sfx.SOUNDS, f"missing cue {name!r}"
         segs = sfx.SOUNDS[name]
         for seg in segs:
-            assert len(seg) == 3
-            freq, dur, shape = seg
+            assert len(seg) in (3, 4)
+            freq, dur, shape = seg[0], seg[1], seg[2]
             assert isinstance(freq, float) and isinstance(dur, float)
             assert shape in {"sine", "square", "saw"}
-        assert sum(d for _, d, _ in segs) < 0.8, f"{name} is not a short one-shot"
+            if len(seg) == 4:
+                assert seg[3] in {"flat", "decay"}
+        assert sum(seg[1] for seg in segs) < 0.8, f"{name} is not a short one-shot"
+
+
+def test_tick_volume_swells_as_deadline_nears() -> None:
+    from client.scenes.word_bomb import tick_volume
+    assert tick_volume(5.0) < tick_volume(2.5) < tick_volume(0.0)
+    assert tick_volume(5.0) == pytest.approx(0.5)
+    assert tick_volume(0.0) == pytest.approx(1.0)
+
+
+def test_ticks_get_louder_as_the_fuse_runs_down(monkeypatch) -> None:
+    import time as _t
+    _, scene = _scene()
+    scene.sfx = _RecSfx()
+    scene._shake = 0.0
+    # far out (~4.5s): a quiet tick
+    scene.app.gamestate = {"deadline": _t.time() + 4.5}
+    scene._last_tick = None
+    scene._tick_countdown()
+    far = scene.sfx.volumes[-1]
+    # near detonation (~0.3s): a loud tick
+    scene.app.gamestate = {"deadline": _t.time() + 0.3}
+    scene._last_tick = None
+    scene._tick_countdown()
+    near = scene.sfx.volumes[-1]
+    assert near > far

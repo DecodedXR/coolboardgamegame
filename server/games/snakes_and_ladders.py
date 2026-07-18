@@ -115,8 +115,8 @@ class SnakesAndLaddersGame:
         self.phase = protocol.PHASE_PLAY
         self.awaiting = AWAIT_ROLL
         self.current_pid = self.order[0]
-        # Set by the connection layer in auto mode so clients can show a
-        # countdown; ``None`` in human-host mode (the host clicks NEXT).
+        # Set by the connection layer to a per-turn deadline so clients can show a
+        # countdown; ``None`` on a bot/absent turn (auto-played after a short delay).
         self.deadline: Optional[float] = None
         self.seq = 0
         self.last_turn: Optional[dict[str, Any]] = None
@@ -446,16 +446,10 @@ class SnakesAndLaddersGame:
 
     # --- serialization ----------------------------------------------------
 
-    def public(self, for_pid: Optional[str], host_id: Optional[str]) -> dict[str, Any]:
-        """Per-player view. ``host_id`` marks the human host (a spectator who runs
-        the show in human mode). The only secret is the shop stock, sent solely to
-        the current player while they are shopping."""
-        if host_id is not None and for_pid == host_id:
-            role = "host"
-        elif self.is_contestant(for_pid):
-            role = "contestant"
-        else:
-            role = "spectator"
+    def public(self, for_pid: Optional[str]) -> dict[str, Any]:
+        """Per-player view (contestant / spectator). The only secret is the shop
+        stock, sent solely to the current player while they are shopping."""
+        role = "contestant" if self.is_contestant(for_pid) else "spectator"
 
         data: dict[str, Any] = {
             "name": protocol.GAME_SNAKES_AND_LADDERS,

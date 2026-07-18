@@ -9,10 +9,9 @@ treats a connection as "any object with an async ``send(str)``".
 The in-game logic it drives is :class:`~server.games.snakes_and_ladders.SnakesAndLaddersGame`,
 a *turn* game. A single :meth:`GameServer._drive` funnel — called after every
 mutation — decides who moves the current turn forward: a bot or an absent human
-is auto-played after a short delay; in auto-host mode a present human gets a
-per-turn deadline; in human-host mode play parks until the host advances. ``_drive``
-always cancels the prior timer first, so there is never more than one pending
-mover per room (the guard against double-advance races).
+is auto-played after a short delay; a present human gets a per-turn deadline.
+``_drive`` always cancels the prior timer first, so there is never more than one
+pending mover per room (the guard against double-advance races).
 """
 
 from __future__ import annotations
@@ -54,8 +53,10 @@ from config import (
     WB_FUSE_START,
     WB_FUSE_STEP,
     WB_FUSE_FLOOR,
+    WB_FUSE_STARTUP_GRACE,
     WB_MIN_WORDS_PER_PROMPT,
-    WB_BOT_FAIL_CHANCE,
+    WB_BOT_DIFFICULTIES,
+    WB_BOT_DEFAULT_DIFFICULTY,
     WB_BOT_DELAY_SECONDS,
 )
 from server.rooms import Room, RoomManager
@@ -93,8 +94,6 @@ class GameServer:
             protocol.C_CREATE_ROOM: GameServer._on_create_room,
             protocol.C_JOIN_ROOM: GameServer._on_join_room,
             protocol.C_SET_READY: GameServer._on_set_ready,
-            protocol.C_SET_HOST_MODE: GameServer._on_set_host_mode,
-            protocol.C_TRANSFER_HOST: GameServer._on_transfer_host,
             protocol.C_START_GAME: GameServer._on_start_game,
             protocol.C_LEAVE_ROOM: GameServer._on_leave_room,
             protocol.C_PING: GameServer._on_ping,
@@ -162,7 +161,6 @@ class GameServer:
             "id": player.id,
             "name": player.name,
             "is_owner": room.owner_id == player_id,
-            "is_host": room.host_id == player_id,
         }
 
     # --- message handlers -------------------------------------------------
@@ -172,11 +170,7 @@ class GameServer:
             await self._send_error(ctx.conn, protocol.ERR_ALREADY_IN_ROOM, "leave your current room first")
             return
         name = _clean_name(msg.get("name"))
-        mode = msg.get("host_mode")
-        if mode not in protocol.HOST_MODES:
-            await self._send_error(ctx.conn, protocol.ERR_BAD_HOST_MODE, f"host_mode must be one of {protocol.HOST_MODES}")
-            return
-        room = self.rooms.create_room(mode)
+        room = self.rooms.create_room()
         player = room.add_player(name, ctx.conn)
         ctx.room, ctx.player_id = room, player.id
         await self._send(ctx.conn, protocol.S_ROOM_CREATED, code=room.code, you=self._you(room, player.id), room=room.public())
@@ -209,34 +203,6 @@ class GameServer:
         player.ready = bool(msg.get("ready"))
         await self._broadcast(room)
 
-    async def _on_set_host_mode(self, ctx: ConnCtx, msg: dict[str, Any]) -> None:
-        room, player = self._require_membership(ctx)
-        if room is None:
-            await self._send_error(ctx.conn, protocol.ERR_NOT_IN_ROOM, "join a room first")
-            return
-        if player.id != room.owner_id:
-            await self._send_error(ctx.conn, protocol.ERR_NOT_HOST, "only the room owner can change host mode")
-            return
-        mode = msg.get("mode")
-        if mode not in protocol.HOST_MODES:
-            await self._send_error(ctx.conn, protocol.ERR_BAD_HOST_MODE, f"host_mode must be one of {protocol.HOST_MODES}")
-            return
-        room.set_host_mode(mode)
-        await self._broadcast(room)
-
-    async def _on_transfer_host(self, ctx: ConnCtx, msg: dict[str, Any]) -> None:
-        room, player = self._require_membership(ctx)
-        if room is None:
-            await self._send_error(ctx.conn, protocol.ERR_NOT_IN_ROOM, "join a room first")
-            return
-        if player.id != room.host_id:
-            await self._send_error(ctx.conn, protocol.ERR_NOT_HOST, "only the current host can transfer the host role")
-            return
-        if not room.transfer_host(str(msg.get("target_id", ""))):
-            await self._send_error(ctx.conn, protocol.ERR_BAD_TARGET, "target must be a player in this room (human host mode)")
-            return
-        await self._broadcast(room)
-
     async def _on_start_game(self, ctx: ConnCtx, msg: dict[str, Any]) -> None:
         room, player = self._require_membership(ctx)
         if room is None:
@@ -249,14 +215,14 @@ class GameServer:
             await self._send_error(ctx.conn, protocol.ERR_GAME_IN_PROGRESS, "a game is already running")
             return
 
-        # Human contestants = connected players, minus the human host (who runs the
-        # show). Bots fill the remaining seats; they are NOT room players (they live
-        # only in the game object), so they never collide with the room cap that
-        # limits *connections* — instead total seats (humans + bots) are capped here.
+        # Human contestants = every connected player. Bots fill the remaining seats;
+        # they are NOT room players (they live only in the game object), so they never
+        # collide with the room cap that limits *connections* — instead total seats
+        # (humans + bots) are capped here.
         contestants = [
             (p.id, p.name)
             for p in room.players.values()
-            if p.connected and not (room.host_mode == protocol.HOST_HUMAN and p.id == room.host_id)
+            if p.connected
         ]
         human_count = len(contestants)
         n_bots = _clamp_bots(msg.get("bots"), human_count)
@@ -277,12 +243,18 @@ class GameServer:
             await self._send_error(ctx.conn, protocol.ERR_BAD_MESSAGE, f"unknown game {game_name!r}")
             return
         if game_name == protocol.GAME_WORD_BOMB:
+            # Unknown/absent difficulty silently defaults to medium (old clients
+            # send no bot_difficulty and must still start a game).
+            diff = msg.get("bot_difficulty")
+            if diff not in WB_BOT_DIFFICULTIES:
+                diff = WB_BOT_DEFAULT_DIFFICULTY
+            base, span = WB_BOT_DIFFICULTIES[diff]
             words, prompts, index, counts = load_dictionary(WB_MIN_WORDS_PER_PROMPT)
             game = WordBombGame(contestants, bots=bots, words=words, prompts=prompts,
                                 index=index, counts=counts, fuse_start=WB_FUSE_START,
                                 fuse_step=WB_FUSE_STEP, fuse_floor=WB_FUSE_FLOOR,
                                 lives=WB_LIVES,
-                                bot_fail_chance=WB_BOT_FAIL_CHANCE, rng=self._make_rng())
+                                bot_base=base, bot_span=span, rng=self._make_rng())
         else:
             game = SnakesAndLaddersGame(
                 contestants,
@@ -450,7 +422,7 @@ class GameServer:
     async def _broadcast_game(self, room: Room, game: SnakesAndLaddersGame) -> None:
         await asyncio.gather(
             *(
-                self._safe_send(p.conn, protocol.encode(protocol.S_GAME_STATE, game=game.public(p.id, room.host_id)))
+                self._safe_send(p.conn, protocol.encode(protocol.S_GAME_STATE, game=game.public(p.id)))
                 for p in room.players.values()
                 if p.connected
             ),
@@ -472,10 +444,9 @@ class GameServer:
         double-advance races).
 
           * bot, or an absent/disconnected human -> auto-play after a short delay
-            (bots play in BOTH host modes; auto-playing an absent human keeps a
-            mid-turn disconnect from deadlocking the game);
-          * auto-host mode, present human  -> arm a per-turn deadline that auto-resolves;
-          * human-host mode, present human -> park (no deadline); the host clicks NEXT.
+            (auto-playing an absent human keeps a mid-turn disconnect from
+            deadlocking the game);
+          * present human  -> arm a per-turn deadline that auto-resolves.
         """
         code = room.code
         self._cancel_timer(code)
@@ -486,12 +457,15 @@ class GameServer:
         if self._actor_needs_autoplay(room, game):
             game.deadline = None
             self._phase_tasks[code] = asyncio.ensure_future(self._auto_turn(code, cur, seq))
-        elif room.host_mode == protocol.HOST_AUTO:
-            seconds = game.fuse_seconds if isinstance(game, WordBombGame) else (SAL_SHOP_SECONDS if game.awaiting == AWAIT_SHOP else SAL_ROLL_SECONDS)
+        else:
+            if isinstance(game, WordBombGame):
+                seconds = game.fuse_seconds
+                if game.seq == 0:                     # the game's first fuse — armed before the client has loaded in
+                    seconds += WB_FUSE_STARTUP_GRACE
+            else:
+                seconds = SAL_SHOP_SECONDS if game.awaiting == AWAIT_SHOP else SAL_ROLL_SECONDS
             game.deadline = time.time() + seconds
             self._phase_tasks[code] = asyncio.ensure_future(self._turn_deadline(code, seconds, cur, seq))
-        else:  # human host: park until the host advances (or the human acts)
-            game.deadline = None
 
     @staticmethod
     def _actor_needs_autoplay(room: Room, game: SnakesAndLaddersGame) -> bool:

@@ -1,9 +1,13 @@
 """Procedurally-synthesized sound effects — no bundled audio assets, no numpy.
 
 Each cue is a short list of ``(frequency_hz, duration_s, shape)`` tone segments
-that :func:`_render_wav` turns into an in-memory 16-bit mono WAV; pygame then
-loads it via ``pygame.mixer.Sound(BytesIO(...))``. Synthesis is pure stdlib
-(``array`` + ``wave``), so it is unit-testable without an audio device.
+that :func:`_render_wav` turns into a 16-bit mono WAV; :meth:`Sfx._sound` writes
+that to a real ``.wav`` file and loads it via ``pygame.mixer.Sound(path)``.
+pygbag's SDL_mixer silently yields a *soundless* clip when a Sound is built from
+a Python file object (``BytesIO``) — only a real file path decodes in the
+browser — so the file detour is what makes audio actually play under WASM (it is
+a no-op difference on desktop). Synthesis is pure stdlib, so it is unit-testable
+without an audio device.
 
 Audio is *best effort*. The mixer is initialised lazily on the first user gesture
 (:meth:`Sfx.init`, called on the first click to satisfy browser autoplay rules),
@@ -15,8 +19,8 @@ rather than crashing the game.
 from __future__ import annotations
 
 import array
-import io
 import math
+import os
 import struct
 from typing import Iterable
 
@@ -26,9 +30,10 @@ _SAMPLE_RATE = 22050
 _AMPLITUDE = 0.32  # headroom so layered cues don't clip
 _MAX_INT16 = 32767
 
-# Tone segment = (frequency in Hz, duration in seconds, wave shape). A frequency
-# of 0 is a silent rest. Shapes are intentionally cheap to compute per sample.
-Segment = tuple[float, float, str]
+# Tone segment = (frequency Hz, duration s, wave shape[, envelope]). Envelope is
+# "flat" (default: triangular edge-fade) or "decay" (percussive: sharp click that
+# falls off like a real clock tick). A frequency of 0 is a silent rest.
+Segment = tuple  # 3- or 4-tuple; see above
 
 # The cue catalog, keyed by the names the animator fires. Kept small, punchy, and
 # deterministic (sine/square/saw only — no noise — so synthesis is reproducible).
@@ -45,10 +50,13 @@ SOUNDS: dict[str, list[Segment]] = {
     "win": [(523.0, 0.10, "square"), (659.0, 0.10, "square"),
             (784.0, 0.10, "square"), (1047.0, 0.20, "square")],
     # word bomb ---------------------------------------------------------------
-    # the clock: dry metronome tap; its hotter sibling is higher AND shorter,
-    # so the acceleration reads even on phone speakers
-    "tick": [(1300.0, 0.03, "square")],
-    "tick_hot": [(1650.0, 0.025, "square")],
+    # the clock: a crisp click (short bright transient) + a woody decaying body,
+    # both percussive so they read as a real *tick*, not a sustained 8-bit buzz.
+    # The scene swells their volume as the fuse runs down (see tick_volume()).
+    "tick":     [(2600.0, 0.009, "square", "decay"), (900.0, 0.05, "sine", "decay")],
+    # its hotter sibling: higher + a touch shorter, so the acceleration still
+    # reads on phone speakers even before the volume swell.
+    "tick_hot": [(3100.0, 0.009, "square", "decay"), (1150.0, 0.045, "sine", "decay")],
     # bomb handed on: quick 3-note rise, airy sine so it stays out of the way
     "pass": [(500.0, 0.04, "sine"), (700.0, 0.04, "sine"), (900.0, 0.05, "sine")],
     # it's YOUR problem now: hard double-hit + upward kick, square = urgent
@@ -73,6 +81,19 @@ SOUNDS: dict[str, list[Segment]] = {
 _FADE_SECONDS = 0.006
 
 
+def _make_cache_dir() -> str:
+    """A writable dir to stage cue ``.wav`` files (see module docstring for why a
+    file is needed). ``tempfile`` first; pygbag's stdlib is trimmed, so fall back
+    to a cwd-relative dir if it's missing."""
+    try:
+        import tempfile
+        return tempfile.mkdtemp(prefix="cbgg_sfx_")
+    except Exception:
+        path = os.path.join(os.getcwd(), ".sfx_cache")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+
 def _sample(shape: str, phase: float) -> float:
     """One sample of a unit-amplitude waveform; ``phase`` is in cycles (0..1 repeats)."""
     frac = phase - math.floor(phase)
@@ -88,15 +109,23 @@ def _render_wav(segments: Iterable[Segment], sample_rate: int = _SAMPLE_RATE) ->
     """Render tone segments to WAV file bytes (16-bit signed mono)."""
     samples = array.array("h")
     fade_n = max(1, int(_FADE_SECONDS * sample_rate))
-    for freq, dur, shape in segments:
+    attack_n = max(1, int(0.0012 * sample_rate))   # ~1.2ms attack for "decay"
+    for seg in segments:
+        freq, dur, shape = seg[0], seg[1], seg[2]
+        env_kind = seg[3] if len(seg) > 3 else "flat"
         n = int(dur * sample_rate)
         for i in range(n):
             if freq <= 0.0:  # a rest
                 samples.append(0)
                 continue
             value = _sample(shape, freq * i / sample_rate)
-            # Triangular fade in/out at the segment edges.
-            env = min(1.0, (i + 1) / fade_n, (n - i) / fade_n)
+            if env_kind == "decay":
+                # percussive: fast attack, exponential fall-off -> a real "tick",
+                # not a sustained buzz. exp(-5) ~= 0.007 by the segment's end.
+                env = min(1.0, (i + 1) / attack_n) * math.exp(-5.0 * i / n)
+            else:
+                # triangular edge fade so abrupt starts/stops don't click.
+                env = min(1.0, (i + 1) / fade_n, (n - i) / fade_n)
             samples.append(int(value * env * _AMPLITUDE * _MAX_INT16))
 
     # Hand-rolled 44-byte RIFF/WAVE header (PCM, mono, 16-bit): pygbag's WASM
@@ -119,6 +148,7 @@ class Sfx:
         self._ok = False
         self._cache: dict[str, "pygame.mixer.Sound"] = {}
         self._pending: list[str] = []  # cues queued for amortized synthesis
+        self._dir: str | None = None   # staging dir for cue .wav files
 
     def init(self) -> bool:
         """Bring audio up, returning whether it is available. Idempotent once
@@ -133,12 +163,23 @@ class Sfx:
             pygame.mixer.init()
         except Exception:  # no audio device / browser restriction -> silent, retry later
             return False
+        if self._dir is None:
+            self._dir = _make_cache_dir()
         self._ok = True
         # Queue in catalog order; pump() drains from the front so "roll" (the first
         # cue fired every turn) is prewarmed first, not left to play()'s synchronous
         # lazy synth -- the frame stall pump() exists to spread out.
         self._pending = list(SOUNDS)
         return True
+
+    def _sound(self, name: str) -> "pygame.mixer.Sound":
+        """Build (once) and return the Sound for ``name``, staging its WAV to a
+        real file first — see the module docstring for why BytesIO won't do."""
+        path = os.path.join(self._dir or ".", name + ".wav")
+        if not os.path.exists(path):
+            with open(path, "wb") as fh:
+                fh.write(_render_wav(SOUNDS[name]))
+        return pygame.mixer.Sound(path)
 
     def pump(self) -> None:
         """Synthesize **at most one** queued cue, off the animation hot path. Call
@@ -157,13 +198,15 @@ class Sfx:
         if name in self._cache:
             return
         try:
-            self._cache[name] = pygame.mixer.Sound(io.BytesIO(_render_wav(SOUNDS[name])))
+            self._cache[name] = self._sound(name)
         except Exception:  # one bad cue is ignored; play() will retry it lazily
             pass
 
-    def play(self, name: str) -> None:
+    def play(self, name: str, volume: float = 1.0) -> None:
         """Play a named cue, or do nothing if audio is unavailable / name unknown.
-        Never raises: a mixer failure mid-game just flips playback to silent."""
+        ``volume`` (0..1) scales this playback — the word-bomb tick uses it to swell
+        as the fuse runs down. Never raises: a mixer failure mid-game flips playback
+        to silent."""
         if not self._ok:
             return
         spec = SOUNDS.get(name)
@@ -172,12 +215,9 @@ class Sfx:
         try:
             sound = self._cache.get(name)
             if sound is None:
-                # Pass the WAV as a file object (not buffer=): pygame then reads the
-                # RIFF header and resamples our 22050 Hz mono clip to the mixer's
-                # actual format. buffer= would treat the header bytes as audio and
-                # assume the wrong rate/channels.
-                sound = pygame.mixer.Sound(io.BytesIO(_render_wav(spec)))
+                sound = self._sound(name)
                 self._cache[name] = sound
+            sound.set_volume(max(0.0, min(1.0, volume)))
             sound.play()
         except Exception:
             self._ok = False  # something broke; degrade to silence for the rest of the run

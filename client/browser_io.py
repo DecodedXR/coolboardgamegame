@@ -68,13 +68,20 @@ def warm_up_server(http_url: str) -> None:
     ``no-cors`` because we only want the side effect: the opaque response is
     never read, which also avoids a CORS preflight. Best-effort — any interop
     failure is swallowed, since the connect path already retries through a server
-    that's still waking (see ``config.CONNECT_MAX_ATTEMPTS``)."""
+    that's still waking (see ``config.CONNECT_MAX_ATTEMPTS``).
+
+    The ``.catch`` is load-bearing: ``fetch`` rejects asynchronously (e.g. the
+    server is unreachable, or it's a ws:// endpoint that isn't an HTTP server),
+    and Python's ``try/except`` can't see an async JS rejection — unhandled, it
+    reaches pygbag's rejection handler and crashes the app with "Failed to
+    fetch". Swallowing it in JS is the only place that works."""
     if not is_browser():
         return
     import json
     import platform  # pygbag-provided in the browser; exposes the JS window
 
     try:
-        platform.window.eval(f"fetch({json.dumps(http_url)}, {{mode: 'no-cors'}})")
+        platform.window.eval(
+            f"fetch({json.dumps(http_url)}, {{mode: 'no-cors'}}).catch(() => {{}})")
     except Exception as exc:
         print("browser_io.warm_up_server error:", exc)

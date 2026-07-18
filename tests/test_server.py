@@ -100,11 +100,11 @@ async def open_conn(server: GameServer) -> tuple[FakeConn, asyncio.Task]:
 # --- tests ----------------------------------------------------------------
 
 
-async def test_create_room_human_owner_is_host():
+async def test_create_room_first_player_owns_it():
     server = GameServer()
     a, ta = await open_conn(server)
 
-    await a.push(protocol.C_CREATE_ROOM, name="Noah", host_mode=protocol.HOST_HUMAN)
+    await a.push(protocol.C_CREATE_ROOM, name="Noah")
 
     created = a.last(protocol.S_ROOM_CREATED)
     assert created is not None
@@ -112,9 +112,8 @@ async def test_create_room_human_owner_is_host():
     assert len(code) == 4
     room = created["room"]
     you = created["you"]
-    assert you["is_owner"] and you["is_host"]
-    assert room["host_mode"] == protocol.HOST_HUMAN
-    assert room["host_id"] == you["id"]
+    assert you["is_owner"]                    # the creator runs the show
+    assert room["owner_id"] == you["id"]
 
     await a.drop()
     await ta
@@ -125,7 +124,7 @@ async def test_join_broadcasts_to_all():
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
 
-    await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_AUTO)
+    await a.push(protocol.C_CREATE_ROOM, name="A")
     code = a.last(protocol.S_ROOM_CREATED)["code"]
     await b.push(protocol.C_JOIN_ROOM, code=code, name="B")
 
@@ -143,7 +142,7 @@ async def test_ready_propagates():
     server = GameServer()
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
-    await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_AUTO)
+    await a.push(protocol.C_CREATE_ROOM, name="A")
     code = a.last(protocol.S_ROOM_CREATED)["code"]
     await b.push(protocol.C_JOIN_ROOM, code=code, name="B")
 
@@ -155,59 +154,17 @@ async def test_ready_propagates():
     await asyncio.gather(ta, tb)
 
 
-async def test_host_mode_toggle_owner_only():
-    server = GameServer()
-    a, ta = await open_conn(server)
-    b, tb = await open_conn(server)
-    await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_HUMAN)
-    code = a.last(protocol.S_ROOM_CREATED)["code"]
-    await b.push(protocol.C_JOIN_ROOM, code=code, name="B")
-
-    # Non-owner B is rejected.
-    await b.push(protocol.C_SET_HOST_MODE, mode=protocol.HOST_AUTO)
-    assert b.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_HOST
-    assert a.room()["host_mode"] == protocol.HOST_HUMAN
-
-    # Owner A flips to auto: host role clears everywhere.
-    await a.push(protocol.C_SET_HOST_MODE, mode=protocol.HOST_AUTO)
-    assert a.room()["host_mode"] == protocol.HOST_AUTO
-    assert a.room()["host_id"] is None
-
-    await a.drop(); await b.drop()
-    await asyncio.gather(ta, tb)
-
-
-async def test_transfer_host_moves_badge():
-    server = GameServer()
-    a, ta = await open_conn(server)
-    b, tb = await open_conn(server)
-    await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_HUMAN)
-    code = a.last(protocol.S_ROOM_CREATED)["code"]
-    await b.push(protocol.C_JOIN_ROOM, code=code, name="B")
-
-    b_id = player_named(a.room(), "B")["id"]
-    await a.push(protocol.C_TRANSFER_HOST, target_id=b_id)
-
-    assert b.room()["host_id"] == b_id
-    # And now A (no longer host) cannot start a human-host game.
-    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)
-    assert a.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_HOST
-
-    await a.drop(); await b.drop()
-    await asyncio.gather(ta, tb)
-
-
 async def test_start_game_reaches_everyone():
     server = GameServer()
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
     c, tc = await open_conn(server)
-    await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_HUMAN)
+    await a.push(protocol.C_CREATE_ROOM, name="A")
     code = a.last(protocol.S_ROOM_CREATED)["code"]
     await b.push(protocol.C_JOIN_ROOM, code=code, name="B")
-    await c.push(protocol.C_JOIN_ROOM, code=code, name="C")  # host + 2 contestants
+    await c.push(protocol.C_JOIN_ROOM, code=code, name="C")  # owner + 2 more contestants
 
-    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)  # A is the human host
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)  # A owns the room
 
     assert protocol.S_GAME_STARTED in a.types()
     assert protocol.S_GAME_STARTED in b.types()
@@ -217,21 +174,21 @@ async def test_start_game_reaches_everyone():
     await asyncio.gather(ta, tb, tc)
 
 
-async def test_host_disconnect_promotes_next(monkeypatch):
+async def test_owner_disconnect_promotes_next(monkeypatch):
     monkeypatch.setattr(connection, "DISCONNECT_GRACE_SECONDS", 0.05)
     server = GameServer()
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
-    await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_HUMAN)
+    await a.push(protocol.C_CREATE_ROOM, name="A")
     code = a.last(protocol.S_ROOM_CREATED)["code"]
     await b.push(protocol.C_JOIN_ROOM, code=code, name="B")
     b_id = player_named(a.room(), "B")["id"]
 
-    await a.drop()  # the human host vanishes
+    await a.drop()  # the owner vanishes
     await ta
 
-    # Host immediately moves to B (the room isn't left leaderless)...
-    assert b.room()["host_id"] == b_id
+    # Ownership immediately moves to B (the room isn't left leaderless)...
+    assert b.room()["owner_id"] == b_id
     # ...and after the grace window A's slot is gone entirely.
     await asyncio.sleep(0.1)
     await settle()
@@ -242,37 +199,36 @@ async def test_host_disconnect_promotes_next(monkeypatch):
 
 
 # --- Room role repair: pure unit tests (no sockets) -----------------------
-# _next_connected_id underlies every owner/host repair (mark_disconnected,
-# remove_player, set_host_mode). Its contract is in the name: a role must never
-# be parked on a disconnected ghost — that is the very "stuck" state the
-# disconnect bookkeeping exists to avoid.
+# _next_connected_id underlies every owner repair (mark_disconnected,
+# remove_player). Its contract is in the name: the owner role must never be
+# parked on a disconnected ghost — that is the very "stuck" state the disconnect
+# bookkeeping exists to avoid.
 
 
 def test_next_connected_id_never_returns_a_disconnected_ghost():
     # Both players in a 2-seat room drop within the grace window (their slots are
     # still present, awaiting expiry). The role-repair must hand ownership to NOBODY
     # (None), not to a disconnected ghost.
-    room = Room(code="TEST", host_mode=protocol.HOST_HUMAN)
+    room = Room(code="TEST")
     a = room.add_player("A", None)
     b = room.add_player("B", None)
-    assert room.owner_id == a.id and room.host_id == a.id  # first player runs the show
+    assert room.owner_id == a.id  # first player runs the show
 
     room.mark_disconnected(a.id)
-    assert room.owner_id == b.id and room.host_id == b.id  # role moves to the live player
+    assert room.owner_id == b.id  # role moves to the live player
 
     room.mark_disconnected(b.id)  # now EVERY remaining slot is disconnected
     # The bug: the fallback returned next(iter(players)) — a disconnected ghost.
     assert room.owner_id is None
-    assert room.host_id is None
     # Stated directly: the helper itself must not surface a disconnected pid.
     assert room._next_connected_id() is None
 
 
 def test_fresh_joiner_owns_a_room_whose_members_all_dropped():
     # Observable consequence of the above: a player who JOINS during the grace window
-    # (the room isn't discarded until empty) must become owner/host and be allowed to
+    # (the room isn't discarded until empty) must become owner and be allowed to
     # start — otherwise the only connected player is locked out by a ghost owner.
-    room = Room(code="TEST", host_mode=protocol.HOST_HUMAN)
+    room = Room(code="TEST")
     a = room.add_player("A", None)
     b = room.add_player("B", None)
     room.mark_disconnected(a.id)
@@ -280,7 +236,6 @@ def test_fresh_joiner_owns_a_room_whose_members_all_dropped():
 
     c = room.add_player("C", None)  # fresh connection joins the still-alive room
     assert room.owner_id == c.id  # add_player claims ownership only when owner_id is None
-    assert room.host_id == c.id   # human-host mode: the new owner runs the show
     assert room.can_start(c.id) is True
 
 
@@ -328,7 +283,7 @@ async def test_health_check_responds_and_still_upgrades():
 async def _host_auto_room(server, conns, names):
     """Create an auto room with the first conn and join the rest. Returns code."""
     first, *rest = conns
-    await first.push(protocol.C_CREATE_ROOM, name=names[0], host_mode=protocol.HOST_AUTO)
+    await first.push(protocol.C_CREATE_ROOM, name=names[0])
     code = first.last(protocol.S_ROOM_CREATED)["code"]
     for conn, name in zip(rest, names[1:]):
         await conn.push(protocol.C_JOIN_ROOM, code=code, name=name)
@@ -338,7 +293,7 @@ async def _host_auto_room(server, conns, names):
 async def test_start_game_needs_two_contestants():
     server = GameServer()
     a, ta = await open_conn(server)
-    await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_AUTO)
+    await a.push(protocol.C_CREATE_ROOM, name="A")
     await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)
     assert a.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_ENOUGH_PLAYERS
     assert protocol.S_GAME_STARTED not in a.types()
@@ -368,7 +323,7 @@ def _conn_for(conns, pid):
 async def test_one_human_plus_bot_starts():
     server = GameServer()
     a, ta = await open_conn(server)
-    await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
+    await a.push(protocol.C_CREATE_ROOM, name="Solo")
     await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots=1)  # 1 human + 1 bot = 2 players
 
     assert protocol.S_GAME_STARTED in a.types()
@@ -386,7 +341,7 @@ async def test_one_human_plus_bot_starts():
 async def test_bad_bots_value_is_ignored():
     server = GameServer()
     a, ta = await open_conn(server)
-    await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
+    await a.push(protocol.C_CREATE_ROOM, name="Solo")
     await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots="lots")  # garbage -> treated as 0 bots
     assert a.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_ENOUGH_PLAYERS
     assert protocol.S_GAME_STARTED not in a.types()
@@ -396,7 +351,7 @@ async def test_bad_bots_value_is_ignored():
 async def test_bot_count_clamped_to_room_cap():
     server = GameServer()
     a, ta = await open_conn(server)
-    await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
+    await a.push(protocol.C_CREATE_ROOM, name="Solo")
     code = a.last(protocol.S_ROOM_CREATED)["code"]
     await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots=99)  # absurd -> clamped to fill the room
 
@@ -410,7 +365,7 @@ async def test_bot_count_clamped_to_room_cap():
 async def test_bots_are_not_room_players():
     server = GameServer()
     a, ta = await open_conn(server)
-    await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
+    await a.push(protocol.C_CREATE_ROOM, name="Solo")
     code = a.last(protocol.S_ROOM_CREATED)["code"]
     await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots=3)
 
@@ -525,7 +480,7 @@ async def test_bot_takes_its_turn_in_auto(monkeypatch):
     monkeypatch.setattr(connection, "SAL_ROLL_SECONDS", 999)  # the human won't auto-roll
     server = GameServer()
     a, ta = await open_conn(server)
-    await a.push(protocol.C_CREATE_ROOM, name="Solo", host_mode=protocol.HOST_AUTO)
+    await a.push(protocol.C_CREATE_ROOM, name="Solo")
     await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots=1)
 
     human = a.game()["your_id"]
@@ -540,25 +495,6 @@ async def test_bot_takes_its_turn_in_auto(monkeypatch):
     assert a.game()["last_turn"]["seq"] >= 2  # human roll + at least one bot turn
 
     await a.push(protocol.C_RETURN_TO_LOBBY)
-    await a.drop(); await ta
-
-
-async def test_bot_plays_in_human_host_mode(monkeypatch):
-    monkeypatch.setattr(connection, "SAL_BOT_DELAY_SECONDS", 0.01)
-    server = GameServer()
-    a, ta = await open_conn(server)  # the human host (runs the show, not a player)
-    await a.push(protocol.C_CREATE_ROOM, name="Host", host_mode=protocol.HOST_HUMAN)
-    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots=2)  # 0 human contestants + 2 bots
-
-    g = a.game()
-    assert g["you_role"] == "host"
-    assert len(g["players"]) == 2 and all(p["is_bot"] for p in g["players"])
-    assert g["your_turn"] is False
-    # Bots play themselves in human-host mode too (no host action needed).
-    await _wait(lambda: a.game()["last_turn"] is not None)
-    assert a.game()["last_turn"]["seq"] >= 1
-
-    await a.push(protocol.C_RETURN_TO_LOBBY)  # stop the bot chain
     await a.drop(); await ta
 
 
@@ -580,28 +516,28 @@ async def test_auto_deadline_auto_rolls(monkeypatch):
     await asyncio.gather(ta, tb)
 
 
-async def test_human_host_force_advance_and_non_host_rejected():
+async def test_owner_force_advance_and_non_owner_rejected(monkeypatch):
+    monkeypatch.setattr(connection, "SAL_ROLL_SECONDS", 999)  # no auto-roll interference
     server = GameServer()
-    a, ta = await open_conn(server)  # host
+    a, ta = await open_conn(server)  # owner / show-runner
     b, tb = await open_conn(server)
     c, tc = await open_conn(server)
-    await a.push(protocol.C_CREATE_ROOM, name="Host", host_mode=protocol.HOST_HUMAN)
+    await a.push(protocol.C_CREATE_ROOM, name="A")
     code = a.last(protocol.S_ROOM_CREATED)["code"]
     await b.push(protocol.C_JOIN_ROOM, code=code, name="B")
     await c.push(protocol.C_JOIN_ROOM, code=code, name="C")
-    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)  # contestants B & C; host A runs the show
+    await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS)  # 3 contestants
 
     g = a.game()
-    assert g["you_role"] == "host" and len(g["players"]) == 2
-    assert g["deadline"] is None  # human-host parks (no auto deadline)
+    assert len(g["players"]) == 3
     cur = g["current_pid"]
 
-    # A non-host cannot force-advance.
+    # A non-owner cannot force-advance.
     await b.push(protocol.C_ADVANCE_PHASE)
     assert b.last(protocol.S_ERROR)["code"] == protocol.ERR_NOT_HOST
     assert a.game()["last_turn"] is None
 
-    # The host clicks NEXT -> the current actor's turn is force-resolved.
+    # The owner clicks NEXT -> the current actor's turn is force-resolved.
     await a.push(protocol.C_ADVANCE_PHASE)
     g = a.game()
     assert g["last_turn"]["seq"] == 1
@@ -610,6 +546,7 @@ async def test_human_host_force_advance_and_non_host_rejected():
         g = a.game()
     assert g["current_pid"] != cur
 
+    await a.push(protocol.C_RETURN_TO_LOBBY)
     await a.drop(); await b.drop(); await c.drop()
     await asyncio.gather(ta, tb, tc)
 
@@ -645,7 +582,7 @@ async def test_make_rng_seam_determinizes_board(monkeypatch):
         server = GameServer()
         monkeypatch.setattr(server, "_make_rng", lambda: random.Random(12345))
         a, ta = await open_conn(server)
-        await a.push(protocol.C_CREATE_ROOM, name="A", host_mode=protocol.HOST_AUTO)
+        await a.push(protocol.C_CREATE_ROOM, name="A")
         await a.push(protocol.C_START_GAME, game=protocol.GAME_SNAKES_AND_LADDERS, bots=1)
         boards.append(a.game()["board"])
         await a.push(protocol.C_RETURN_TO_LOBBY)

@@ -77,9 +77,21 @@ WB_LIVES = 2                  # lives per player; 0 lives = eliminated
 WB_FUSE_START = 20.0          # fuse for a fresh bomb (seconds)
 WB_FUSE_STEP = 0.5            # each accepted word shaves this off the next fuse
 WB_FUSE_FLOOR = 7.0           # the fuse never gets shorter than this
+WB_FUSE_STARTUP_GRACE = 15.0  # extra seconds on the GAME'S FIRST fuse only, so a
+                              # slow client load-in (WASM scene enter, sfx synth,
+                              # cold start) can't burn the whole first turn before
+                              # the player can act. Subsequent turns use WB_FUSE_START.
 WB_MIN_WORDS_PER_PROMPT = 1000 # a prompt substring must appear in at least this many words
-WB_BOT_FAIL_CHANCE = 0.25     # chance a bot fumbles its turn and eats the explosion
 WB_BOT_DELAY_SECONDS = 6      # how long a bot "thinks" before answering (word bomb only)
+
+# Bot difficulty -> (base, span) for bot_fail_chance: fail probability runs
+# base (no pressure) .. base+span (few words left AND fuse at the floor).
+WB_BOT_DIFFICULTIES = {
+    "easy":   (0.25, 0.55),
+    "medium": (0.10, 0.40),
+    "hard":   (0.02, 0.18),
+}
+WB_BOT_DEFAULT_DIFFICULTY = "medium"
 
 assert SAL_SNAKE_COUNT > SAL_LADDER_COUNT, "board must be snake-heavy (more snakes than ladders)"
 # Every special occupies a distinct cell; cells 1 and last are reserved (no specials).

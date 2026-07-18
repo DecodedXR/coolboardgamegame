@@ -5,15 +5,15 @@ scuffed homebrew gameshows (word games, trivia, board games) run by a host for a
 handful of contestants. Built with **pygame** clients talking to a small
 **websockets** server.
 
-Think *"Jackbox meets a Discord gameshow."* One player can be the **host** (reveals
-prompts, judges, torments contestants) or the room can run **host-less / automated**
-- it's a per-room toggle.
+Think *"Jackbox meets a Discord gameshow."* Every room is **auto-run**: the player
+who created it (the **owner**) starts games and can end them back to the lobby, and
+all connected players are contestants - fuses and turn timers always arm themselves.
 
 ## Status
 
 - **Milestone 1 - networking plumbing ✅** The multiplayer spine: lobby, rooms,
-  live state broadcast, ready-up, the human/auto **host toggle**, **host handoff**,
-  and graceful disconnect with a grace period.
+  live state broadcast, ready-up, **owner** authority with automatic handoff, and
+  graceful disconnect with a grace period.
 - **Milestone 2 - networked Snakes & Ladders ✅** A turn-based, server-authoritative
   board game plugged in behind `start_game` - and **snake-heavy**, so winning is
   brutal. Roll the dice to move; landing on a special tile spins a Wheel-of-Names
@@ -21,8 +21,8 @@ prompts, judges, torments contestants) or the room can run **host-less / automat
   debuff on you. A gold economy and held powerups (immunity / boost / double /
   reroll) ride on top. The board is freshly randomized each game. Server-side
   **bot players** fill empty seats so you can play solo against the computer.
-  Driven either by a **human host** (manual *next* control) or the **auto host**
-  (per-turn countdown timers). The server resolves each turn into an ordered
+  Driven by per-turn countdown timers (the owner can also force the current turn
+  along with **NEXT**). The server resolves each turn into an ordered
   timeline that clients replay as animation (token hops, snake slides, wheel
   spins, cutscenes, procedural SFX).
 - **Milestone 3 - true online (cloud-hosted) ✅** The server is deployed on
@@ -40,10 +40,12 @@ prompts, judges, torments contestants) or the room can run **host-less / automat
   it before the fuse burns down; a valid, unused word passes the bomb on with a
   fresh prompt. Timing out explodes the bomb (a lost life), and 0 lives means
   elimination - last player alive wins. The server ships a ~168k-word dictionary
-  and validates every submission; bots, the human-host **DETONATE** button, and
-  the auto-host fuse timer all work exactly as in Snakes & Ladders. A lit cartoon
-  bomb, a crawling spark, a ring of seated players, and a whole scene that heats
-  up as the fuse shortens carry the drama.
+  and validates every submission; bots and the fuse timer work exactly as in Snakes
+  & Ladders. Bots crack under pressure - the fewer valid words a prompt has left
+  and the shorter the fuse, the more likely they fumble - and the lobby's
+  **BOTS: EASY/MEDIUM/HARD** setting scales that difficulty. A lit cartoon bomb, a
+  crawling spark, a ring of seated players, and a whole scene that heats up as the
+  fuse shortens carry the drama.
 
 ```
 shared/protocol.py    wire format (message types + JSON encode/decode), shared by both sides
@@ -71,18 +73,16 @@ play.
 
 ### Playing Snakes & Ladders
 
-One player starts the game from the lobby (the **host** in human mode, the
-**owner** in auto mode), optionally seating a few **bots** with the `- bots N +`
+The **owner** starts the game from the lobby, optionally seating a few **bots** with the `- bots N +`
 stepper to fill out the board - you need at least two players total (humans + bots).
 On your turn, click **ROLL** to move along the serpentine board. Land on a snake
 and you slide *down* (there are far more snakes than ladders - winning is meant to
 hurt); land on a special tile to spin a wheel for a random outcome, gain gold, take
 a debuff, or open a **shop** to buy a powerup. Powerups you hold (immunity / boost /
 double / reroll) can be armed *before* you roll. Reach the final cell exactly to win
-(overshooting bounces back). In **auto** mode a per-turn timer keeps things moving
-and bots take their own turns; in **human** mode the host can force the current turn
-along with **NEXT**. When someone wins, the host returns everyone to the lobby to
-play again.
+(overshooting bounces back). A per-turn timer keeps things moving and bots take
+their own turns; the owner can force the current turn along with **NEXT**. When
+someone wins, the owner returns everyone to the lobby to play again.
 
 ### Playing Word Bomb
 
@@ -95,14 +95,13 @@ the fuse burns down. A valid, unused word passes the bomb to the next player wit
 fresh prompt; a word that is not real, does not contain the prompt, or was already
 used is bounced (the fuse keeps burning - it does not reset). If the fuse runs out
 the bomb explodes and you lose a life; at 0 lives you are eliminated, and the last
-player standing wins. In **auto** mode the fuse is a per-turn countdown that
+player standing wins. The fuse is a per-turn countdown that
 starts at 20s and tightens by half a second every solved word (floor 7s); an
 explosion resets it to 20s, so the game speeds up the longer everyone survives.
 A live count under the prompt shows how many valid words are still left for it
-(shrinking as words get used up). Bots
-take their own turns; in **human** mode the host holds the detonator and clicks
-**DETONATE** to blow the current player's turn. Bots fill empty seats just like in
-Snakes & Ladders.
+(shrinking as words get used up). Bots take their own turns and fill empty seats
+just like in Snakes & Ladders; they fumble more often as the word count drops and
+the fuse shortens, tuned by the lobby's **BOTS: EASY/MEDIUM/HARD** difficulty.
 
 ## Setup
 
@@ -133,14 +132,14 @@ python -m pip install -r requirements.txt
    - same machine as the server → `localhost`
    - another machine on the LAN → the server machine's LAN IP (e.g. `192.168.1.42`), port `8765`
 
-4. One player picks a **host mode** (HUMAN or AUTO) and clicks **HOST A GAME** to get
-   a room **code**. Everyone else types that code and clicks **JOIN**.
+4. One player clicks **HOST A GAME** to get a room **code**. Everyone else types
+   that code and clicks **JOIN**.
 
-5. In the lobby: toggle **READY**; the **owner** can flip host mode; in HUMAN mode the
-   host clicks a player to **pass the host role**; the starter can seat **bots** with
-   the `- bots N +` stepper and pick the game with the **GAME:** toggle (Word Bomb by
-   default, or Snakes & Ladders); the host (HUMAN) or owner (AUTO) clicks **START
-   GAME** to launch it (see *Playing Word Bomb* / *Playing Snakes & Ladders* above).
+5. In the lobby: toggle **READY**; the **owner** can seat **bots** with the
+   `- bots N +` stepper, set the bot **difficulty** (Word Bomb) with the
+   **BOTS: EASY/MEDIUM/HARD** button, and pick the game with the **GAME:** toggle
+   (Word Bomb by default, or Snakes & Ladders); the owner clicks **START GAME** to
+   launch it (see *Playing Word Bomb* / *Playing Snakes & Ladders* above).
 
 ## Cloud (live)
 
@@ -160,8 +159,8 @@ python -m pytest
 ```
 
 `test_server.py` drives the server through fake connections to assert the full
-broadcast behavior (create/join, ready, host toggle, host handoff, grace-period
-disconnect) plus the Snakes & Ladders turn driver end to end (auto + human host,
+broadcast behavior (create/join, ready, owner handoff, grace-period
+disconnect) plus the Snakes & Ladders turn driver end to end (auto turns,
 bots taking turns, deadlines, disconnect-during-turn, shop buys, return-to-lobby).
 `test_snakes_and_ladders.py` covers the pure game rules directly (board gen, the
 turn timeline, bounce, transports, the economy), and the `test_board_render` /

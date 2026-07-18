@@ -2,9 +2,9 @@
 
 A Bomb-Party-style word game. The current player must submit a real English word
 *containing* the prompt substring before the fuse runs out; a valid, unused word
-passes the bomb on with a fresh prompt. A timeout (the connection layer's
-deadline / a host DETONATE) explodes the bomb: the current player loses a life,
-and at 0 lives they are eliminated. Last player alive wins.
+passes the bomb on with a fresh prompt. A timeout (the connection layer's fuse
+deadline) explodes the bomb: the current player loses a life, and at 0 lives they
+are eliminated. Last player alive wins.
 
 Like :class:`~server.games.snakes_and_ladders.SnakesAndLaddersGame`, this class is
 pure game state: the connection layer drives it (records submissions, runs
@@ -70,6 +70,17 @@ def derive_prompts(words, min_count, pool_cap=_BOT_POOL_CAP):
     return prompts, index, surviving_counts
 
 
+def bot_fail_chance(options, fuse_seconds, fuse_start, fuse_floor, base, span):
+    """Chance a bot fumbles: scarce words and a burned-down fuse both raise it.
+
+    ``base`` at zero pressure -> ``base + span`` at full pressure, capped 0.9.
+    """
+    word_pressure = max(0.0, 1.0 - options / 5000.0)   # 0 at >=5k words, ->1 as they run out
+    denom = max(fuse_start - fuse_floor, 1e-9)
+    time_pressure = min(1.0, max(0.0, (fuse_start - fuse_seconds) / denom))
+    return min(0.9, base + span * (word_pressure + time_pressure) / 2.0)
+
+
 @lru_cache(maxsize=1)
 def load_dictionary(min_count: int = 500):
     """Read ``words.txt`` and derive the prompt table once per process.
@@ -89,7 +100,7 @@ def load_dictionary(min_count: int = 500):
 class WordBombGame:
     def __init__(self, contestants, *, bots=(), words, prompts, index=None,
                  counts=None, fuse_start=20.0, fuse_step=0.5, fuse_floor=7.0,
-                 lives=2, bot_fail_chance=0.25, rng=None) -> None:
+                 lives=2, bot_base=0.10, bot_span=0.40, rng=None) -> None:
         contestants = list(contestants)
         bots = list(bots)
         self.contestant_ids: list[str] = [pid for pid, _ in contestants]
@@ -106,7 +117,8 @@ class WordBombGame:
         self.fuse_step = fuse_step
         self.fuse_floor = fuse_floor
         self.fuse_seconds = fuse_start
-        self.bot_fail_chance = bot_fail_chance
+        self.bot_base = bot_base
+        self.bot_span = bot_span
 
         self.lives: dict[str, int] = {pid: lives for pid in self.order}
         self.used: set[str] = set()
@@ -195,8 +207,8 @@ class WordBombGame:
         return "accepted"
 
     def advance(self) -> None:
-        """The explosion — host DETONATE / deadline timeout / absent human all route
-        here. The current player loses a life (eliminated at 0); the last player
+        """The explosion — a fuse-deadline timeout or an absent player routes here.
+        The current player loses a life (eliminated at 0); the last player
         alive wins."""
         if self.is_over:
             return
@@ -228,10 +240,12 @@ class WordBombGame:
         self._count_options()
 
     def bot_action(self, pid: str) -> dict[str, Any]:
-        """Pure: what a trivial bot would do now. Fumbles at ``bot_fail_chance``
-        (the caller then explodes it); otherwise plays a random unused indexed word
-        containing the prompt, or passes if it can't find one."""
-        if self.rng.random() < self.bot_fail_chance:
+        """Pure: what a trivial bot would do now. Fumbles at a pressure-scaled
+        chance (the caller then explodes it); otherwise plays a random unused indexed
+        word containing the prompt, or passes if it can't find one."""
+        chance = bot_fail_chance(self.options, self.fuse_seconds, self.fuse_start,
+                                 self.fuse_floor, self.bot_base, self.bot_span)
+        if self.rng.random() < chance:
             return {"kind": "pass"}
         candidates = [w for w in (self.index.get(self.prompt) or []) if w not in self.used]
         if not candidates:
@@ -240,16 +254,10 @@ class WordBombGame:
 
     # --- serialization ----------------------------------------------------
 
-    def public(self, for_pid: Optional[str], host_id: Optional[str]) -> dict[str, Any]:
-        """Per-player view, mirroring the S&L role derivation (host / contestant /
-        spectator). Nothing is secret in word bomb, so every player sees the same
-        prompt, feed, and roster."""
-        if host_id is not None and for_pid == host_id:
-            role = "host"
-        elif self.is_contestant(for_pid):
-            role = "contestant"
-        else:
-            role = "spectator"
+    def public(self, for_pid: Optional[str]) -> dict[str, Any]:
+        """Per-player view (contestant / spectator). Nothing is secret in word bomb,
+        so every player sees the same prompt, feed, and roster."""
+        role = "contestant" if self.is_contestant(for_pid) else "spectator"
 
         return {
             "name": protocol.GAME_WORD_BOMB,

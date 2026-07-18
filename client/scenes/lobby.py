@@ -1,8 +1,8 @@
-"""Lobby: live player list, ready-up, and host-only controls.
+"""Lobby: live player list, ready-up, and owner-only controls.
 
 All authority flags are derived from the latest ``room`` snapshot (not the stale
 ``you`` from join time), so badges and buttons update the instant a broadcast
-arrives — including when the host role is transferred to or away from us.
+arrives — including when room ownership passes to or away from us.
 """
 
 from __future__ import annotations
@@ -30,11 +30,15 @@ _CTRL_W = 208
 _CTRL_Y1 = 600
 _CTRL_Y2 = 658
 
+# Bot difficulty cycle. Duplicated as three strings on purpose: the server owns
+# the (base, span) presets and validates the choice, so the client never imports
+# WB_BOT_DIFFICULTIES (cheaper than a new shared-protocol surface).
+_DIFFICULTIES = ("easy", "medium", "hard")
+
 
 class LobbyScene(Scene):
     def on_enter(self) -> None:
         self.ready_btn = ui.Button("READY", (_LIST_X, _CTRL_Y1, _CTRL_W, 50), self._toggle_ready)
-        self.mode_btn = ui.Button("HOST MODE", (_CTRL_X2, _CTRL_Y1, _CTRL_W, 50), self._toggle_mode)
         self.start_btn = ui.Button("START GAME", (_LIST_X, _CTRL_Y2, _CTRL_W, 50), self._start)
         self.leave_btn = ui.Button("LEAVE", (_CTRL_X2, _CTRL_Y2, _CTRL_W, 50), self._leave)
         # The show-runner can seat bots to fill out a Snakes & Ladders game (solo
@@ -43,6 +47,10 @@ class LobbyScene(Scene):
         self.bots = 0
         self.bots_minus = ui.Button("-", (_LIST_X + 152, _BOTS_Y, _BOTS_BTN, _BOTS_BTN), self._bots_dec)
         self.bots_plus = ui.Button("+", (_LIST_X + 244, _BOTS_Y, _BOTS_BTN, _BOTS_BTN), self._bots_inc)
+        # Bot difficulty (Word Bomb): scales how hard bots crack under pressure.
+        # On the stepper row, right of the bots +/- (right edge x=456).
+        self.difficulty = "medium"
+        self.diff_btn = ui.Button("BOTS: MEDIUM", (_LIST_X + 296, _BOTS_Y, 136, _BOTS_BTN), self._cycle_difficulty)
         # The show-runner picks which minigame the lobby launches. Word Bomb is the
         # default; the button toggles between the two ``protocol.GAMES``.
         self.game = protocol.GAME_WORD_BOMB
@@ -74,6 +82,10 @@ class LobbyScene(Scene):
     def _bots_dec(self) -> None:
         self.bots = max(0, self.bots - 1)
 
+    def _cycle_difficulty(self) -> None:
+        i = _DIFFICULTIES.index(self.difficulty)
+        self.difficulty = _DIFFICULTIES[(i + 1) % len(_DIFFICULTIES)]
+
     def _show_stepper(self) -> bool:
         """Show the bots stepper only to the show-runner, and only when there is a
         free seat to fill (also keeps it clear of the 'pass host' hint, which only
@@ -95,10 +107,6 @@ class LobbyScene(Scene):
         return self.my_id is not None and self.my_id == self.room.get("owner_id")
 
     @property
-    def is_host(self) -> bool:
-        return self.my_id is not None and self.my_id == self.room.get("host_id")
-
-    @property
     def me(self) -> dict[str, Any]:
         for p in self.room.get("players", []):
             if p["id"] == self.my_id:
@@ -110,18 +118,13 @@ class LobbyScene(Scene):
     def _toggle_ready(self) -> None:
         self.app.net.send(protocol.C_SET_READY, ready=not self.me.get("ready", False))
 
-    def _toggle_mode(self) -> None:
-        if not self.is_owner:
-            return
-        new = protocol.HOST_AUTO if self.room.get("host_mode") == protocol.HOST_HUMAN else protocol.HOST_HUMAN
-        self.app.net.send(protocol.C_SET_HOST_MODE, mode=new)
-
     def _start(self) -> None:
         # Clamp to the seats still open at click time (the roster may have grown
         # since the count was dialed in), so the request matches what the server
         # can seat.
         self.bots = min(self.bots, self._max_bots())
-        self.app.net.send(protocol.C_START_GAME, bots=self.bots, game=self.game)
+        self.app.net.send(protocol.C_START_GAME, bots=self.bots, game=self.game,
+                          bot_difficulty=self.difficulty)
 
     def _leave(self) -> None:
         self.app.net.send(protocol.C_LEAVE_ROOM)
@@ -131,8 +134,6 @@ class LobbyScene(Scene):
         self.app.go_to(MenuScene(self.app))
 
     def _can_start(self) -> bool:
-        if self.room.get("host_mode") == protocol.HOST_HUMAN:
-            return self.is_host
         return self.is_owner
 
     def _row_rects(self) -> list[tuple[dict[str, Any], pygame.Rect]]:
@@ -146,22 +147,17 @@ class LobbyScene(Scene):
     def handle_event(self, event: pygame.event.Event) -> None:
         self.ready_btn.handle(event)
         self.leave_btn.handle(event)
-        if self.is_owner:
-            self.mode_btn.handle(event)
         self.start_btn.enabled = self._can_start()
         self.start_btn.handle(event)
-        # Only the show-runner seats bots, and only while a seat is open.
+        # Only the show-runner seats bots and picks their difficulty, and only while
+        # a seat is open.
         if self._show_stepper():
             self.bots_minus.handle(event)
             self.bots_plus.handle(event)
+            self.diff_btn.handle(event)
         # Only the show-runner picks the game.
         if self._can_start():
             self.game_btn.handle(event)
-        # In human-host mode, the host clicks a player row to hand off the host role.
-        if self.is_host and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            for p, rect in self._row_rects():
-                if rect.collidepoint(event.pos) and p["id"] != self.my_id:
-                    self.app.net.send(protocol.C_TRANSFER_HOST, target_id=p["id"])
 
     def on_message(self, msg: dict[str, Any]) -> None:
         t = msg["type"]
@@ -182,9 +178,7 @@ class LobbyScene(Scene):
         surf.fill(ui.BG)
         room = self.room
         code = room.get("code", "????")
-        mode = room.get("host_mode", "?")
         ui.Label(f"ROOM {code}", (_LIST_X, 56), 40, ui.ACCENT).draw(surf)
-        ui.Label(f"host mode: {mode}", (_LIST_X, 106), 18, ui.MUTED).draw(surf)
         ui.Label("PLAYERS", (_LIST_X, 150), 18, ui.MUTED).draw(surf)
 
         for p, rect in self._row_rects():
@@ -193,8 +187,6 @@ class LobbyScene(Scene):
             tags = []
             if p["id"] == room.get("owner_id"):
                 tags.append("owner")
-            if p["id"] == room.get("host_id"):
-                tags.append("HOST")
             if not p["connected"]:
                 tags.append("offline")
             label = name + ("   [" + " ".join(tags) + "]" if tags else "")
@@ -203,34 +195,28 @@ class LobbyScene(Scene):
             if p["ready"]:
                 ui.Label("READY", (rect.right - 80, rect.centery - 9), 18, ui.GOOD).draw(surf)
 
-        if self.is_host:
-            ui.Label("click a player to pass host", (_LIST_X, _ROW_TOP + len(room.get("players", [])) * _ROW_H + 6),
-                     16, ui.MUTED).draw(surf)
-
-        # Bots stepper (runner only, and only while a seat is open to fill).
+        # Bots stepper + difficulty (runner only, and only while a seat is open to fill).
         if self._show_stepper():
             self.bots = min(self.bots, self._max_bots())
             ui.Label("bots", (_LIST_X, _BOTS_Y + 8), 18, ui.MUTED).draw(surf)
             self.bots_minus.draw(surf)
             ui.Label(str(self.bots), (_LIST_X + 206, _BOTS_Y + 8), 20, ui.TEXT).draw(surf)
             self.bots_plus.draw(surf)
+            self.diff_btn.label = f"BOTS: {self.difficulty.upper()}"
+            self.diff_btn.draw(surf)
 
         # Game picker (runner only).
         if self._can_start():
             self.game_btn.label = self._game_label()
             self.game_btn.draw(surf)
 
-        # Bottom control bar (2x2 grid).
+        # Bottom control bar. The freed top-right slot is left empty.
         self.ready_btn.label = "UNREADY" if self.me.get("ready") else "READY"
         self.ready_btn.draw(surf)
-        if self.is_owner:
-            self.mode_btn.label = f"MODE: {mode.upper()}"
-            self.mode_btn.draw(surf)
         self.start_btn.enabled = self._can_start()
         self.start_btn.draw(surf)
         self.leave_btn.draw(surf)
         if not self.start_btn.enabled:
-            who = "host" if mode == protocol.HOST_HUMAN else "owner"
-            ui.Label(f"only the {who} can start", (_LIST_X, _CTRL_Y2 + 56), 14, ui.MUTED).draw(surf)
+            ui.Label("only the owner can start", (_LIST_X, _CTRL_Y2 + 56), 14, ui.MUTED).draw(surf)
         if self.status:
             ui.Label(self.status, (_LIST_X, _CTRL_Y2 + 78), 14, ui.ACCENT).draw(surf)

@@ -33,6 +33,16 @@ def test_render_wav_more_segments_make_a_longer_clip() -> None:
     assert len(longer) > len(short)
 
 
+def test_decay_envelope_falls_off() -> None:
+    import array
+    data = sfx._render_wav([(880.0, 0.06, "sine", "decay")])
+    pcm = array.array("h"); pcm.frombytes(data[44:])   # skip 44-byte header
+    n = len(pcm)
+    head = max(abs(s) for s in pcm[: n // 5])          # first 20%
+    tail = max(abs(s) for s in pcm[-n // 5:])          # last 20%
+    assert head > tail * 4, "decay segment should be far quieter at its tail"
+
+
 def test_render_wav_supports_a_silent_rest() -> None:
     # freq 0 = a rest; still produces frames, just silence.
     data = sfx._render_wav([(0.0, 0.02, "sine")])
@@ -97,6 +107,9 @@ def test_init_does_not_synthesize_in_frame_but_pump_amortizes_it(monkeypatch) ->
         def play(self):
             pass
 
+        def set_volume(self, volume):
+            pass
+
     built: list[int] = []
     monkeypatch.setattr(pygame.mixer, "init", lambda *a, **k: None)
     monkeypatch.setattr(pygame.mixer, "Sound", lambda *a, **k: built.append(1) or FakeSound())
@@ -120,6 +133,9 @@ def test_play_builds_a_missing_cue_lazily(monkeypatch) -> None:
         def play(self):
             pass
 
+        def set_volume(self, volume):
+            pass
+
     built: list[int] = []
     monkeypatch.setattr(pygame.mixer, "init", lambda *a, **k: None)
     monkeypatch.setattr(pygame.mixer, "Sound", lambda *a, **k: built.append(1) or FakeSound())
@@ -137,6 +153,9 @@ def test_pump_prewarms_cues_in_catalog_order_roll_first(monkeypatch) -> None:
     # synchronous lazy synth (the very frame-freeze that pump() exists to avoid).
     class FakeSound:
         def play(self) -> None:
+            pass
+
+        def set_volume(self, volume) -> None:
             pass
 
     monkeypatch.setattr(pygame.mixer, "init", lambda *a, **k: None)
@@ -159,6 +178,9 @@ def test_pump_skips_a_cue_already_built_lazily_by_play(monkeypatch) -> None:
     # an instance the game may already be holding/looping).
     class FakeSound:
         def play(self) -> None:
+            pass
+
+        def set_volume(self, volume) -> None:
             pass
 
     built: list[int] = []

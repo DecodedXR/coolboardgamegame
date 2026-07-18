@@ -65,11 +65,9 @@ _ITEM_ROW_BOTTOM_Y = 596
 
 # --- pure decision helpers (unit-tested headless) -------------------------
 
-def is_runner(room: dict[str, Any], my_id: Optional[str], role: str) -> bool:
+def is_runner(room: dict[str, Any], my_id: Optional[str]) -> bool:
     """Whether *we* are the show-runner who may force-advance / end the game: the
-    human host in human-host mode, else the room owner in auto mode."""
-    if room.get("host_mode") == protocol.HOST_HUMAN:
-        return role == "host"
+    room owner."""
     return my_id is not None and my_id == room.get("owner_id")
 
 
@@ -217,12 +215,8 @@ class SnakesAndLaddersScene(Scene):
     def phase(self) -> str:
         return self.gs.get("phase", protocol.PHASE_PLAY)
 
-    @property
-    def role(self) -> str:
-        return self.gs.get("you_role", "spectator")
-
     def _is_runner(self) -> bool:
-        return is_runner(self.app.room or {}, self.my_id, self.role)
+        return is_runner(self.app.room or {}, self.my_id)
 
     def _name_of(self, pid: Optional[str]) -> str:
         for p in self.gs.get("players", []):

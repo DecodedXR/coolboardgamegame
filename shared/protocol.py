@@ -13,30 +13,21 @@ from __future__ import annotations
 import json
 from typing import Any
 
-# --- Host modes -----------------------------------------------------------
-
-HOST_HUMAN = "human"  # one player runs the show
-HOST_AUTO = "auto"  # the engine runs the show (no host player)
-HOST_MODES = (HOST_HUMAN, HOST_AUTO)
-
-
 # --- Client -> Server message types ---------------------------------------
 
-C_CREATE_ROOM = "create_room"        # {name, host_mode}
+C_CREATE_ROOM = "create_room"        # {name}
 C_JOIN_ROOM = "join_room"            # {code, name}
 C_SET_READY = "set_ready"            # {ready}
-C_SET_HOST_MODE = "set_host_mode"    # {mode}            (host only)
-C_TRANSFER_HOST = "transfer_host"    # {target_id}       (host only)
-C_START_GAME = "start_game"          # {bots?:int, game?:str}  (host / human-host or any player in auto)
+C_START_GAME = "start_game"          # {bots?:int, game?:str, bot_difficulty?:str}  (room owner)
 C_LEAVE_ROOM = "leave_room"          # {}
 C_PING = "ping"                      # {}
 
 # --- In-game: generic show-runner controls (client -> server) -------------
-# Both apply to any minigame: the human host (or the auto-mode owner) drives the
-# flow and can end the game back to the lobby.
+# Both apply to any minigame: the room owner drives the flow and can end the
+# game back to the lobby.
 
-C_ADVANCE_PHASE = "advance_phase"    # {}                (show-runner: human host / auto owner)
-C_RETURN_TO_LOBBY = "return_to_lobby"  # {}              (show-runner) end game, back to lobby
+C_ADVANCE_PHASE = "advance_phase"    # {}                (room owner)
+C_RETURN_TO_LOBBY = "return_to_lobby"  # {}              (room owner) end game, back to lobby
 
 # --- In-game: Snakes & Ladders (client -> server) -------------------------
 # A turn-based board game: the current player rolls; landing on special tiles
@@ -95,8 +86,6 @@ ERR_ROOM_FULL = "room_full"
 ERR_ALREADY_IN_ROOM = "already_in_room"
 ERR_NOT_IN_ROOM = "not_in_room"
 ERR_NOT_HOST = "not_host"
-ERR_BAD_HOST_MODE = "bad_host_mode"
-ERR_BAD_TARGET = "bad_target"
 ERR_GAME_IN_PROGRESS = "game_in_progress"
 ERR_NOT_ENOUGH_PLAYERS = "not_enough_players"
 ERR_NO_GAME = "no_game"

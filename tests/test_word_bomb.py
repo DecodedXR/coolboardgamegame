@@ -16,7 +16,7 @@ from pathlib import Path
 
 import server.connection as connection
 from server.connection import GameServer
-from server.games.word_bomb import WordBombGame, derive_prompts
+from server.games.word_bomb import WordBombGame, bot_fail_chance, derive_prompts
 from shared import protocol
 from tests.test_server import FakeConn, open_conn, settle, _conn_for, _wait  # noqa: F401
 
@@ -32,7 +32,7 @@ def _game(contestants=None, **over) -> WordBombGame:
     contestants = contestants or [("p1", "A"), ("p2", "B")]
     kw = dict(bots=(), words=PURE_WORDS, prompts=list(PURE_PROMPTS),
               index={k: list(v) for k, v in PURE_INDEX.items()},
-              lives=2, bot_fail_chance=0.25, rng=random.Random(7))
+              lives=2, rng=random.Random(7))
     kw.update(over)
     return WordBombGame(contestants, **kw)
 
@@ -122,13 +122,39 @@ def test_pass_bomb_skips_eliminated_players() -> None:
 
 
 def test_bot_action_plays_a_word_or_fumbles_by_chance() -> None:
-    g = _game(bot_fail_chance=0.0)
+    g = _game(bot_base=0.0, bot_span=0.0)      # no pressure floor -> never fumbles
     g.prompt = "ca"
     act = g.bot_action("p2")
     assert act["kind"] == "word"
     assert "ca" in act["word"] and act["word"] not in g.used
-    g2 = _game(bot_fail_chance=1.0)
+    g2 = _game(bot_base=1.0, bot_span=0.0)      # maxed base -> chance hits the 0.9 cap
+    g2.rng.random = lambda: 0.5                  # any roll under the cap -> fumble
     assert g2.bot_action("p2") == {"kind": "pass"}
+
+
+# --- bot_fail_chance pressure curve --------------------------------------
+
+def test_bot_fail_chance_is_base_at_zero_pressure() -> None:
+    # 5000+ words and a full fuse -> no pressure at all -> exactly the base.
+    assert bot_fail_chance(5000, 20.0, 20.0, 7.0, 0.1, 0.4) == 0.1
+
+
+def test_bot_fail_chance_at_full_pressure() -> None:
+    # 0 words left and the fuse at the floor -> base + span (both pressures maxed).
+    assert bot_fail_chance(0, 7.0, 20.0, 7.0, 0.1, 0.4) == 0.5
+
+
+def test_bot_fail_chance_is_monotone_in_words_and_fuse() -> None:
+    # Fewer words -> higher chance; a shorter fuse -> higher chance.
+    assert bot_fail_chance(500, 20.0, 20.0, 7.0, 0.1, 0.4) > \
+        bot_fail_chance(5000, 20.0, 20.0, 7.0, 0.1, 0.4)
+    assert bot_fail_chance(5000, 8.0, 20.0, 7.0, 0.1, 0.4) > \
+        bot_fail_chance(5000, 18.0, 20.0, 7.0, 0.1, 0.4)
+
+
+def test_bot_fail_chance_caps_at_nine_tenths() -> None:
+    # base+span would run to 1.2 at full pressure, but the chance is capped at 0.9.
+    assert bot_fail_chance(0, 7.0, 20.0, 7.0, 0.8, 0.4) == 0.9
 
 
 # --- fuse curve + options -------------------------------------------------
@@ -175,10 +201,10 @@ def test_options_counts_remaining_words_and_reaches_public() -> None:
     g = _game(prompts=["ca"], words={"cat", "cap", "car", "dog"},
               index={"ca": ["cat", "cap", "car"]}, counts={"ca": 3})
     assert g.prompt == "ca" and g.options == 3    # single-prompt game pins "ca"
-    assert g.public("p1", None)["options"] == 3
+    assert g.public("p1")["options"] == 3
     g.submit_word("p1", "cat")                    # accept re-picks "ca"
     assert g.prompt == "ca" and g.options == 2    # one used "ca"-word drops it
-    assert g.public("p2", None)["options"] == 2
+    assert g.public("p2")["options"] == 2
 
 
 def test_derive_prompts_keeps_only_frequent_substrings() -> None:
@@ -221,18 +247,20 @@ def _toy_load(*_a, **_k):
             {k: list(v) for k, v in DRIVER_INDEX.items()}, dict(DRIVER_COUNTS))
 
 
-async def _wb_room(server, conns, names, monkeypatch, *, host_mode=protocol.HOST_AUTO,
-                   bots=0):
+async def _wb_room(server, conns, names, monkeypatch, *, bots=0, difficulty=None):
     """Create a room, join the rest, and start a Word Bomb game with the toy dict
     and a determinized RNG. Returns the room code."""
     monkeypatch.setattr(connection, "load_dictionary", _toy_load)
     monkeypatch.setattr(server, "_make_rng", lambda: random.Random(0))
     first, *rest = conns
-    await first.push(protocol.C_CREATE_ROOM, name=names[0], host_mode=host_mode)
+    await first.push(protocol.C_CREATE_ROOM, name=names[0])
     code = first.last(protocol.S_ROOM_CREATED)["code"]
     for conn, name in zip(rest, names[1:]):
         await conn.push(protocol.C_JOIN_ROOM, code=code, name=name)
-    await first.push(protocol.C_START_GAME, game=protocol.GAME_WORD_BOMB, bots=bots)
+    payload = {"game": protocol.GAME_WORD_BOMB, "bots": bots}
+    if difficulty is not None:
+        payload["bot_difficulty"] = difficulty
+    await first.push(protocol.C_START_GAME, **payload)
     return code
 
 
@@ -280,23 +308,26 @@ async def test_word_bomb_valid_submit_passes_the_bomb(monkeypatch) -> None:
 
 
 async def test_word_bomb_deadline_follows_the_fuse_curve(monkeypatch) -> None:
-    # After an accepted word the driver re-arms the deadline off the tightened fuse
-    # (20.0 -> 19.5), so the remaining time drops by ~0.5s.
+    # The game's FIRST fuse gets WB_FUSE_STARTUP_GRACE on top of fuse_start, so a slow
+    # client load-in can't burn the whole first turn (20 + 15 = 35). After the first
+    # accepted word (seq -> 1) the grace is gone and the driver re-arms off the
+    # tightened fuse (20.0 -> 19.5).
     import time
+    from config import WB_FUSE_START, WB_FUSE_STEP, WB_FUSE_STARTUP_GRACE
     server = GameServer()
     a, ta = await open_conn(server)
     b, tb = await open_conn(server)
     await _wb_room(server, [a, b], ["A", "B"], monkeypatch)
 
     remaining_before = a.game()["deadline"] - time.time()
-    assert abs(remaining_before - 20.0) < 1.0     # fresh bomb ~ fuse_start
+    assert abs(remaining_before - (WB_FUSE_START + WB_FUSE_STARTUP_GRACE)) < 1.0  # first fuse: 20 + 15 grace
 
     cur = a.game()["current_pid"]
     cur_conn = _conn_for([a, b], cur)
     await cur_conn.push(protocol.C_SUBMIT_WORD, word=_valid_word(a.game()["prompt"], set()))
 
     remaining_after = a.game()["deadline"] - time.time()
-    assert abs(remaining_after - 19.5) < 1.0      # one accept -> fuse 19.5
+    assert abs(remaining_after - (WB_FUSE_START - WB_FUSE_STEP)) < 1.0   # turn 2: 19.5, grace gone
 
     await a.push(protocol.C_RETURN_TO_LOBBY)
     await a.drop(); await b.drop()
@@ -337,33 +368,33 @@ async def test_roll_dice_is_rejected_during_word_bomb(monkeypatch) -> None:
     await a.drop(); await b.drop()
 
 
-async def test_word_bomb_human_host_detonate_costs_a_life(monkeypatch) -> None:
+async def test_word_bomb_difficulty_reaches_the_game(monkeypatch) -> None:
+    # The chosen difficulty must plumb through start_game to the game object's
+    # bot_base (hard -> 0.02); a silent-default typo would leave it at medium.
     server = GameServer()
-    a, ta = await open_conn(server)   # human host
-    b, tb = await open_conn(server)
-    c, tc = await open_conn(server)
-    await _wb_room(server, [a, b, c], ["Host", "B", "C"], monkeypatch,
-                   host_mode=protocol.HOST_HUMAN)
-
-    g = a.game()
-    assert g["you_role"] == "host"
-    assert g["deadline"] is None              # human-host parks (no fuse)
-    cur = g["current_pid"]
-    lives_before = next(p["lives"] for p in g["players"] if p["id"] == cur)
-
-    await a.push(protocol.C_ADVANCE_PHASE)    # the host detonates
-    g = a.game()
-    cur_player = next(p for p in g["players"] if p["id"] == cur)
-    assert cur_player["lives"] == lives_before - 1
-    assert any(e["kind"] == "explode" for e in g["feed"])
+    a, ta = await open_conn(server)
+    code = await _wb_room(server, [a], ["Solo"], monkeypatch, bots=1, difficulty="hard")
+    assert server.games[code].bot_base == 0.02
 
     await a.push(protocol.C_RETURN_TO_LOBBY)
-    await a.drop(); await b.drop(); await c.drop()
+    await a.drop(); await ta
+
+
+async def test_word_bomb_bogus_difficulty_falls_back_to_medium(monkeypatch) -> None:
+    # An unknown difficulty silently defaults to medium (old clients send none).
+    server = GameServer()
+    a, ta = await open_conn(server)
+    code = await _wb_room(server, [a], ["Solo"], monkeypatch, bots=1, difficulty="bogus")
+    assert server.games[code].bot_base == 0.10
+
+    await a.push(protocol.C_RETURN_TO_LOBBY)
+    await a.drop(); await ta
 
 
 async def test_word_bomb_bot_fumbles_until_human_wins(monkeypatch) -> None:
     monkeypatch.setattr(connection, "WB_BOT_DELAY_SECONDS", 0.01)   # bot autoplays fast
-    monkeypatch.setattr(connection, "WB_BOT_FAIL_CHANCE", 1.0)      # the bot always fumbles
+    # Force the (default) medium difficulty to a maxed base so the bot always fumbles.
+    monkeypatch.setattr(connection, "WB_BOT_DIFFICULTIES", {"medium": (1.0, 0.0)})
     server = GameServer()
     a, ta = await open_conn(server)
     await _wb_room(server, [a], ["Solo"], monkeypatch, bots=1)      # 1 human + 1 bot

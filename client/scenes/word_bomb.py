@@ -56,11 +56,21 @@ def _lerp(c1, c2, t):
 
 
 def press_of(remaining: Optional[float], total: Optional[float]) -> float:
-    """0.0 (calm) .. 1.0 (about to explode). A ``None`` deadline (human-host mode,
-    no fuse) reads as an idle simmer of 0.25."""
+    """0.0 (calm) .. 1.0 (about to explode). A ``None`` deadline (a bot's turn, no
+    fuse shown) reads as an idle simmer of 0.25."""
     if remaining is None or not total:
         return 0.25
     return _clamp01(1 - remaining / total)
+
+
+def tick_volume(remaining: float) -> float:
+    """Tick loudness: a firm, steady 0.5 for the bulk of the turn (>=5s left),
+    swelling hard to a full 1.0 as the final 5s run to 0. Keyed to absolute
+    seconds-left (not turn fraction) so the crescendo
+    feels the same regardless of how long the turn was. The ``**1.4`` power curve
+    holds the swell back early then punches in the final seconds — more intense
+    than a flat linear ramp."""
+    return _clamp01(0.5 + max(0.0, (5.0 - remaining) / 5.0) ** 1.4 * 0.5)
 
 
 def heat_color(press: float):
@@ -150,7 +160,6 @@ class WordBombScene(Scene):
         self.live_typing = ""    # the current player's in-progress word (theirs)
 
         # Input widgets, created ONCE (never per frame).
-        self.detonate_btn = ui.Button("DETONATE", (24, 706, 208, 50), self._detonate)
         self.lobby_btn = ui.Button("LOBBY", (248, 706, 208, 50), self._return_to_lobby)
 
         # Per-frame FX state (decaying timers + particles). The scene simulates
@@ -187,8 +196,6 @@ class WordBombScene(Scene):
 
     def _is_runner(self) -> bool:
         room = self.app.room or {}
-        if room.get("host_mode") == protocol.HOST_HUMAN:
-            return self.gs.get("you_role") == "host"
         return self.my_id is not None and self.my_id == room.get("owner_id")
 
     def _name_of(self, pid: Optional[str]) -> str:
@@ -209,9 +216,6 @@ class WordBombScene(Scene):
         self.app.net.send(protocol.C_SUBMIT_WORD, word=self.typed)
         self.typed = ""
         self.app.net.send(protocol.C_TYPING, text="")   # clears everyone's view
-
-    def _detonate(self) -> None:
-        self.app.net.send(protocol.C_ADVANCE_PHASE)
 
     def _return_to_lobby(self) -> None:
         self.app.net.send(protocol.C_RETURN_TO_LOBBY)
@@ -359,19 +363,23 @@ class WordBombScene(Scene):
             self._last_tick = None
             return
         remaining = max(0.0, deadline - time.time())
-        bucket = int(remaining * 2)                    # half-second resolution
+        # tick RATE accelerates as the fuse burns: brisk from the start, frantic by
+        # the end. rate = ticks/sec; the bomb heats up (tick_hot) in the final 2s.
+        if remaining > 5:
+            rate, cue = 2.0, "tick"        # brisk from the start
+        elif remaining > 2:
+            rate, cue = 3.0, "tick"        # picking up
+        elif remaining > 1:
+            rate, cue = 5.0, "tick_hot"    # frantic + hot
+        else:
+            rate, cue = 8.0, "tick_hot"    # near-buzz right before detonation
+        bucket = int(remaining * rate)
         if bucket == self._last_tick:
             return
         self._last_tick = bucket
         if self._shake > 0:
             return                                     # never tick over a boom
-        whole = bucket % 2 == 0
-        if remaining <= 1:
-            self.sfx.play("tick_hot")                  # every half-second boundary
-        elif remaining <= 2 and whole:
-            self.sfx.play("tick_hot")
-        elif remaining <= 5 and whole:
-            self.sfx.play("tick")
+        self.sfx.play(cue, volume=tick_volume(remaining))
 
     # --- input ------------------------------------------------------------
 
@@ -380,12 +388,9 @@ class WordBombScene(Scene):
             self.sfx.init()  # retry path: keys are the only gesture when typing
 
         gs = self.gs
-        over = gs.get("phase") == protocol.PHASE_GAMEOVER
 
-        # Show-runner controls: DETONATE only in human-host mode (no auto fuse).
+        # Show-runner control: end the game back to the lobby.
         if self._is_runner():
-            if not over and gs.get("deadline") is None:
-                self.detonate_btn.handle(event)
             self.lobby_btn.handle(event)
 
         # Typing, live only on our own play-turn. No focus, no box: keys go
@@ -481,10 +486,8 @@ class WordBombScene(Scene):
         if not over:
             self._draw_particles(surf)
 
-        # 12. show-runner controls
+        # 12. show-runner control: LOBBY (end the game)
         if self._is_runner():
-            if not over and gs.get("deadline") is None:
-                self.detonate_btn.draw(surf)
             self.lobby_btn.draw(surf)
 
         # 13. heat vignette (edges close in as the fuse shortens)
@@ -546,9 +549,6 @@ class WordBombScene(Scene):
             if remaining <= 5:
                 size = 26 + int(8 * max(0.0, 0.3 - (remaining % 1.0)) / 0.3)
             ui.Label(f"{remaining:.1f}s", (240, 300 + BOMB_R + 34), size, rim, center=True).draw(surf)
-        else:
-            ui.Label("HOST HOLDS THE DETONATOR", (240, 300 + BOMB_R + 34), 14,
-                     ui.MUTED, center=True).draw(surf)
 
     def _draw_prompt_tiles(self, surf, prompt, heat, press, ox, oy, now) -> None:
         prompt = (prompt or "").upper()

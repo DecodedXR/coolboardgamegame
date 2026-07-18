@@ -46,14 +46,12 @@ class FakeNet:
 class FakeApp:
     """Just enough of the App surface for a Scene to run headless."""
 
-    def __init__(self, *, host_mode: str = protocol.HOST_AUTO) -> None:
+    def __init__(self) -> None:
         self.width, self.height = 480, 800
         self.net = FakeNet()
         self.you = {"id": "p1", "name": "Alice"}
         self.room = {
             "owner_id": "p1",
-            "host_id": "p1",
-            "host_mode": host_mode,
             "players": [{"id": "p1", "name": "Alice", "ready": True, "connected": True}],
         }
         self.gamestate: Any = None
@@ -144,16 +142,10 @@ def test_countdown_floors_at_zero() -> None:
 
 # --- is_runner ------------------------------------------------------------
 
-def test_runner_is_owner_in_auto_mode() -> None:
-    room = {"host_mode": protocol.HOST_AUTO, "owner_id": "p1"}
-    assert is_runner(room, my_id="p1", role="contestant") is True
-    assert is_runner(room, my_id="p2", role="contestant") is False
-
-
-def test_runner_is_host_in_human_mode() -> None:
-    room = {"host_mode": protocol.HOST_HUMAN, "owner_id": "p1"}
-    assert is_runner(room, my_id="p1", role="host") is True
-    assert is_runner(room, my_id="p1", role="contestant") is False
+def test_runner_is_the_room_owner() -> None:
+    room = {"owner_id": "p1"}
+    assert is_runner(room, my_id="p1") is True
+    assert is_runner(room, my_id="p2") is False
 
 
 # --- animating_override ---------------------------------------------------
@@ -313,7 +305,23 @@ def test_lobby_start_sends_bot_count() -> None:
     lobby.on_enter()
     assert lobby.bots == 0
     lobby._start()
-    assert app.net.sent[-1] == (protocol.C_START_GAME, {"bots": 0, "game": protocol.GAME_WORD_BOMB})
+    assert app.net.sent[-1] == (protocol.C_START_GAME,
+                                {"bots": 0, "game": protocol.GAME_WORD_BOMB,
+                                 "bot_difficulty": "medium"})
+
+
+def test_lobby_cycles_bot_difficulty_and_carries_it_on_start() -> None:
+    from client.scenes.lobby import LobbyScene
+    app = FakeApp()
+    lobby = LobbyScene(app)
+    lobby.on_enter()
+    assert lobby.difficulty == "medium"
+    lobby._cycle_difficulty()
+    assert lobby.difficulty == "hard"       # medium -> hard
+    lobby._cycle_difficulty()
+    assert lobby.difficulty == "easy"       # hard -> easy (wraps)
+    lobby._start()
+    assert app.net.sent[-1][1]["bot_difficulty"] == "easy"
 
 
 def test_lobby_bots_stepper_clamps() -> None:
@@ -338,7 +346,9 @@ def test_lobby_start_forwards_chosen_bot_count() -> None:
     lobby._bots_inc()
     lobby._bots_inc()
     lobby._start()
-    assert app.net.sent[-1] == (protocol.C_START_GAME, {"bots": 2, "game": protocol.GAME_WORD_BOMB})
+    assert app.net.sent[-1] == (protocol.C_START_GAME,
+                                {"bots": 2, "game": protocol.GAME_WORD_BOMB,
+                                 "bot_difficulty": "medium"})
 
 
 def _roster(app: FakeApp, n: int) -> None:
@@ -373,7 +383,9 @@ def test_lobby_stepper_hidden_and_count_clamped_when_room_full() -> None:
     lobby._bots_inc()
     assert lobby.bots == 0
     lobby._start()                  # a stale count would be clamped at start, too
-    assert app.net.sent[-1] == (protocol.C_START_GAME, {"bots": 0, "game": protocol.GAME_WORD_BOMB})
+    assert app.net.sent[-1] == (protocol.C_START_GAME,
+                                {"bots": 0, "game": protocol.GAME_WORD_BOMB,
+                                 "bot_difficulty": "medium"})
 
 
 # --- cutscene wiring (BUG: skip banner must survive the turn advance) ------
